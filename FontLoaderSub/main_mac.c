@@ -1,13 +1,14 @@
 /* main_mac.c — macOS CLI entry point for FontLoaderSub
  *
- * Usage: fontloadersub <subtitle-path> <font-dir>
+ * Usage: fontloadersub --font-dir <font-dir> --subtitle <path> [--subtitle <path> ...]
  *
- *   <subtitle-path>  ASS/SSA subtitle file or directory to scan
  *   <font-dir>       Directory containing font files (TTF/OTF/TTC)
+ *   <subtitle-path>  ASS/SSA subtitle file or directory to scan
  *
  * The tool loads the fonts required by the subtitle(s) at User scope
  * so they are visible to all applications on the current user session.
- * Press Enter or send SIGINT (Ctrl-C) to unload the fonts and exit.
+ * The process stays alive until stdin closes or it receives SIGINT/SIGTERM,
+ * then unloads the fonts and exits.
  *
  * Cache: a font index cache is saved as fc-subs.db in <font-dir> and
  * reused on the next run, matching the Windows version behaviour.
@@ -17,10 +18,14 @@
 #include "font_set.h"
 #include "util.h"
 
+#include <errno.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/select.h>
+#include <unistd.h>
 
 #define kCacheFile      L"fc-subs.db"
 #define kCacheFile_utf8  "fc-subs.db"
@@ -28,10 +33,6 @@
 
 /* Forward declarations of UTF helpers defined in util_posix.c */
 extern int fl_wchar_to_utf8(const wchar_t *w, char *buf, size_t sz);
-
-/* ------------------------------------------------------------------ */
-/*  Allocator                                                           */
-/* ------------------------------------------------------------------ */
 
 static void *mac_realloc(void *existing, size_t size, void *arg) {
   (void)arg;
@@ -42,25 +43,15 @@ static void *mac_realloc(void *existing, size_t size, void *arg) {
   return realloc(existing, size);
 }
 
-/* ------------------------------------------------------------------ */
-/*  SIGINT handler                                                      */
-/* ------------------------------------------------------------------ */
-
 static volatile int g_interrupted = 0;
 static FL_LoaderCtx *g_ctx = NULL;
 
-static void on_sigint(int sig) {
+static void on_signal(int sig) {
   (void)sig;
   g_interrupted = 1;
   if (g_ctx)
     fl_cancel(g_ctx);
 }
-
-/* ------------------------------------------------------------------ */
-/*  argv → wchar_t helper (ASCII/Latin-1 byte copy; paths on macOS    */
-/*  are normalised NFC UTF-8, but we handle the full range via the    */
-/*  byte-copy approach since our internal format is UTF-16).           */
-/* ------------------------------------------------------------------ */
 
 static wchar_t *argv_to_wchar(const char *arg, allocator_t *alloc) {
   size_t n = strlen(arg);
@@ -68,7 +59,6 @@ static wchar_t *argv_to_wchar(const char *arg, allocator_t *alloc) {
       (wchar_t *)alloc->alloc(NULL, (n + 1) * sizeof(wchar_t), alloc->arg);
   if (!buf)
     return NULL;
-  /* Full UTF-8 → UTF-16 conversion */
   const unsigned char *p = (const unsigned char *)arg;
   wchar_t *w = buf;
   while (*p) {
@@ -100,10 +90,6 @@ static wchar_t *argv_to_wchar(const char *arg, allocator_t *alloc) {
   return buf;
 }
 
-/* ------------------------------------------------------------------ */
-/*  Print a wchar_t string to stdout via UTF-8 conversion              */
-/* ------------------------------------------------------------------ */
-
 static void print_wstr(const wchar_t *ws) {
   if (!ws)
     return;
@@ -112,82 +98,85 @@ static void print_wstr(const wchar_t *ws) {
   fputs(buf, stdout);
 }
 
-/* ------------------------------------------------------------------ */
-/*  Main                                                                */
-/* ------------------------------------------------------------------ */
+static void wait_for_shutdown(void) {
+  while (!g_interrupted) {
+    fd_set readfds;
+    int r;
 
-int main(int argc, char *argv[]) {
-  if (argc < 3) {
-    fprintf(stderr,
-            "Usage: %s <subtitle-path> <font-dir>\n\n"
-            "  <subtitle-path>  ASS/SSA file or directory\n"
-            "  <font-dir>       Directory containing TTF/OTF/TTC fonts\n\n"
-            "Loads required fonts at user scope.  Press Enter or Ctrl-C to "
-            "unload and exit.\n"
-            "Font index is cached in <font-dir>/" kCacheFile_utf8
-            " for faster startup.\n",
-            argv[0]);
-    return 1;
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+
+    r = select(STDIN_FILENO + 1, &readfds, NULL, NULL, NULL);
+    if (r > 0 && FD_ISSET(STDIN_FILENO, &readfds)) {
+      char buf[256];
+      ssize_t n = read(STDIN_FILENO, buf, sizeof buf);
+      if (n == 0) {
+        break;
+      }
+      if (n < 0 && errno == EINTR) {
+        continue;
+      }
+    } else if (r < 0 && errno == EINTR) {
+      continue;
+    }
+  }
+}
+
+static int add_subtitle(FL_LoaderCtx *ctx, allocator_t *alloc,
+                        const char *subtitle_path) {
+  wchar_t *subtitle_w = argv_to_wchar(subtitle_path, alloc);
+  int r;
+  if (!subtitle_w)
+    return FL_OUT_OF_MEMORY;
+  r = fl_add_subs(ctx, subtitle_w);
+  alloc->alloc(subtitle_w, 0, alloc->arg);
+  if (r == FL_OS_ERROR)
+    return FL_OK;
+  return r;
+}
+
+static int run_loader(FL_LoaderCtx *ctx, allocator_t *alloc,
+                      const char **subtitle_paths, size_t subtitle_count,
+                      const char *font_path) {
+  wchar_t *font_w = NULL;
+  int r = FL_OK;
+  size_t i;
+
+  font_w = argv_to_wchar(font_path, alloc);
+  if (!font_w)
+    return FL_OUT_OF_MEMORY;
+
+  for (i = 0; i != subtitle_count; i++) {
+    printf("Scanning subtitles: %s\n", subtitle_paths[i]);
+    r = add_subtitle(ctx, alloc, subtitle_paths[i]);
+    if (r != FL_OK)
+      goto cleanup;
   }
 
-  const char *sub_path  = argv[1];
-  const char *font_path = argv[2];
-
-  /* Set up allocator */
-  allocator_t alloc = {.alloc = mac_realloc, .arg = NULL};
-
-  /* Convert CLI arguments to wchar_t */
-  wchar_t *sub_w  = argv_to_wchar(sub_path, &alloc);
-  wchar_t *font_w = argv_to_wchar(font_path, &alloc);
-  if (!sub_w || !font_w) {
-    fprintf(stderr, "Out of memory\n");
-    return 1;
-  }
-
-  /* Initialise loader */
-  FL_LoaderCtx ctx;
-  int r = fl_init(&ctx, &alloc);
-  if (r != FL_OK) {
-    fprintf(stderr, "Failed to initialise font loader (%d)\n", r);
-    return 1;
-  }
-  g_ctx = &ctx;
-  signal(SIGINT, on_sigint);
-
-  /* --- Step 1: parse subtitles --- */
-  printf("Scanning subtitles: %s\n", sub_path);
-  r = fl_add_subs(&ctx, sub_w);
-  if (r != FL_OK && r != FL_OS_ERROR) {
-    fprintf(stderr, "Error scanning subtitles (%d)\n", r);
-    goto cleanup;
-  }
   printf("  Found %u subtitle(s), %u font reference(s)\n",
-         ctx.num_sub, ctx.num_sub_font);
+         ctx->num_sub, ctx->num_sub_font);
 
-  if (ctx.num_sub_font == 0) {
+  if (ctx->num_sub_font == 0) {
     printf("No fonts needed — nothing to do.\n");
     goto cleanup;
   }
 
-  /* --- Step 2: load font index (try cache first) --- */
   printf("Loading font index from: %s\n", font_path);
-  r = fl_scan_fonts(&ctx, font_w, kCacheFile, kBlackFile);
+  r = fl_scan_fonts(ctx, font_w, kCacheFile, kBlackFile);
 
   {
     FS_Stat stat = {0};
-    if (ctx.font_set)
-      fs_stat(ctx.font_set, &stat);
+    if (ctx->font_set)
+      fs_stat(ctx->font_set, &stat);
 
     if (stat.num_face == 0) {
-      /* Cache miss (file absent, stale, or empty) — full scan */
       printf("  Cache miss — scanning font files...\n");
-      r = fl_scan_fonts(&ctx, font_w, NULL, kBlackFile);
+      r = fl_scan_fonts(ctx, font_w, NULL, kBlackFile);
       if (r == FL_OK) {
-        fs_stat(ctx.font_set, &stat);
+        fs_stat(ctx->font_set, &stat);
         printf("  Indexed %u file(s) / %u face(s)",
                stat.num_file, stat.num_face);
-        /* Save the cache for next time */
-        if (fl_save_cache(&ctx, kCacheFile) == FL_OK) {
+        if (fl_save_cache(ctx, kCacheFile) == FL_OK) {
           printf(" — cache saved");
         }
         printf("\n");
@@ -202,65 +191,145 @@ int main(int argc, char *argv[]) {
     goto cleanup;
   }
 
-  /* --- Step 3: load fonts --- */
   printf("Loading fonts...\n");
-  r = fl_load_fonts(&ctx);
+  r = fl_load_fonts(ctx);
   if (r != FL_OK) {
     fprintf(stderr, "Error loading fonts (%d)\n", r);
     goto cleanup;
   }
 
-  /* --- Step 4: report --- */
   printf("\nResults:\n");
-  FL_FontMatch *data = ctx.loaded_font.data;
-  for (size_t i = 0; i != ctx.loaded_font.n; i++) {
-    FL_FontMatch *m = &data[i];
-    const char *tag;
-    if (m->flag & FL_LOAD_DUP)
-      tag = "[dup] ";
-    else if (m->flag & FL_OS_LOADED)
-      tag = "[sys] ";
-    else if (m->flag & FL_LOAD_OK)
-      tag = "[ok]  ";
-    else if (m->flag & FL_LOAD_ERR)
-      tag = "[ X]  ";
-    else if (m->flag & FL_LOAD_MISS)
-      tag = "[---] ";
-    else
-      tag = "[?]   ";
+  {
+    FL_FontMatch *data = ctx->loaded_font.data;
+    for (i = 0; i != ctx->loaded_font.n; i++) {
+      FL_FontMatch *m = &data[i];
+      const char *tag;
+      if (m->flag & FL_LOAD_DUP)
+        tag = "[dup] ";
+      else if (m->flag & FL_OS_LOADED)
+        tag = "[sys] ";
+      else if (m->flag & FL_LOAD_OK)
+        tag = "[ok]  ";
+      else if (m->flag & FL_LOAD_ERR)
+        tag = "[ X]  ";
+      else if (m->flag & FL_LOAD_MISS)
+        tag = "[---] ";
+      else
+        tag = "[?]   ";
 
-    fputs(tag, stdout);
-    print_wstr(m->face);
-    if (m->filename && !(m->flag & (FL_OS_LOADED | FL_LOAD_DUP))) {
-      fputs(" <- ", stdout);
-      print_wstr(m->filename);
+      fputs(tag, stdout);
+      print_wstr(m->face);
+      if (m->filename && !(m->flag & (FL_OS_LOADED | FL_LOAD_DUP))) {
+        fputs(" <- ", stdout);
+        print_wstr(m->filename);
+      }
+      putchar('\n');
     }
-    putchar('\n');
   }
 
   printf("\nLoaded: %u  Failed: %u  Missing: %u\n",
-         ctx.num_font_loaded, ctx.num_font_failed, ctx.num_font_unmatched);
+         ctx->num_font_loaded, ctx->num_font_failed, ctx->num_font_unmatched);
+  printf("FLS_READY loaded=%u failed=%u missing=%u\n",
+         ctx->num_font_loaded, ctx->num_font_failed, ctx->num_font_unmatched);
+  fflush(stdout);
 
-  if (ctx.num_font_loaded == 0) {
+  if (ctx->num_font_loaded == 0) {
     printf("No fonts were loaded (all already in system or none matched).\n");
     goto cleanup;
   }
 
-  /* --- Step 5: wait --- */
-  printf("\nFonts are loaded.  Press Enter to unload and exit...\n");
-  if (!g_interrupted) {
-    getchar();
-  }
+  wait_for_shutdown();
 
-  /* --- Step 6: unload --- */
   printf("Unloading fonts...\n");
-  fl_unload_fonts(&ctx);
+  fl_unload_fonts(ctx);
   printf("Done.\n");
 
 cleanup:
+  alloc->alloc(font_w, 0, alloc->arg);
+  return r;
+}
+
+static void print_usage(const char *argv0) {
+  fprintf(stderr,
+          "Usage: %s --font-dir <font-dir> --subtitle <path> [--subtitle <path> ...]\n\n"
+          "  <font-dir>       Directory containing TTF/OTF/TTC fonts\n"
+          "  <subtitle-path>  ASS/SSA file or directory\n\n"
+          "Loads required fonts at user scope until stdin closes or SIGINT/SIGTERM is received.\n"
+          "Font index is cached in <font-dir>/" kCacheFile_utf8
+          " for faster startup.\n",
+          argv0);
+}
+
+int main(int argc, char *argv[]) {
+  allocator_t alloc = {.alloc = mac_realloc, .arg = NULL};
+  FL_LoaderCtx ctx;
+  const char *font_path = NULL;
+  const char **subtitle_paths = NULL;
+  size_t subtitle_count = 0;
+  size_t subtitle_cap = 0;
+  int r;
+  int i;
+
+  if (argc < 4) {
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  for (i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "--font-dir") == 0) {
+      if (i + 1 >= argc) {
+        print_usage(argv[0]);
+        free((void *)subtitle_paths);
+        return 1;
+      }
+      font_path = argv[++i];
+    } else if (strcmp(argv[i], "--subtitle") == 0) {
+      const char **new_paths;
+      if (i + 1 >= argc) {
+        print_usage(argv[0]);
+        free((void *)subtitle_paths);
+        return 1;
+      }
+      if (subtitle_count == subtitle_cap) {
+        size_t new_cap = subtitle_cap ? subtitle_cap * 2 : 4;
+        new_paths = realloc((void *)subtitle_paths, new_cap * sizeof(*subtitle_paths));
+        if (!new_paths) {
+          fprintf(stderr, "Out of memory\n");
+          free((void *)subtitle_paths);
+          return 1;
+        }
+        subtitle_paths = new_paths;
+        subtitle_cap = new_cap;
+      }
+      subtitle_paths[subtitle_count++] = argv[++i];
+    } else {
+      print_usage(argv[0]);
+      free((void *)subtitle_paths);
+      return 1;
+    }
+  }
+
+  if (!font_path || subtitle_count == 0) {
+    print_usage(argv[0]);
+    free((void *)subtitle_paths);
+    return 1;
+  }
+
+  r = fl_init(&ctx, &alloc);
+  if (r != FL_OK) {
+    fprintf(stderr, "Failed to initialise font loader (%d)\n", r);
+    free((void *)subtitle_paths);
+    return 1;
+  }
+
+  g_ctx = &ctx;
+  signal(SIGINT, on_signal);
+  signal(SIGTERM, on_signal);
+
+  r = run_loader(&ctx, &alloc, subtitle_paths, subtitle_count, font_path);
+
   fl_free(&ctx);
-  alloc.alloc(sub_w, 0, alloc.arg);
-  alloc.alloc(font_w, 0, alloc.arg);
+  free((void *)subtitle_paths);
   return (r == FL_OK || r == FL_OS_ERROR) ? 0 : 1;
 }
 

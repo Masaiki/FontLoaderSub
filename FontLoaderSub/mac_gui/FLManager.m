@@ -2,34 +2,25 @@
 
 #import <dispatch/dispatch.h>
 
-#import "FLBridge.h"
-
-#include "font_loader.h"
-#include "font_set.h"
-#include "util.h"
+#include <errno.h>
 
 static NSString *const FLManagerErrorDomain = @"com.fontloadersub.manager";
-static const wchar_t *kCacheFile = L"fc-subs.db";
-static const wchar_t *kBlackFile = L"fc-ignore.txt";
-
-static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
-    (void)arg;
-    if (size == 0) {
-        free(existing);
-        return NULL;
-    }
-    return realloc(existing, size);
-}
+static NSString *const FLReadyPrefix = @"FLS_READY ";
 
 @interface FLManager () {
     dispatch_queue_t _queue;
-    FL_LoaderCtx *_ctx;
-    allocator_t _alloc;
     FLManagerState _state;
     NSUInteger _numLoaded;
     NSUInteger _numFailed;
     NSUInteger _numUnmatched;
     NSUInteger _generation;
+    NSTask *_task;
+    NSPipe *_stdinPipe;
+    NSPipe *_stdoutPipe;
+    NSPipe *_stderrPipe;
+    NSMutableData *_stdoutBuffer;
+    NSMutableData *_stderrBuffer;
+    BOOL _helperReady;
 }
 @end
 
@@ -39,8 +30,6 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
     self = [super init];
     if (self) {
         _queue = dispatch_queue_create("com.fontloadersub.worker", DISPATCH_QUEUE_SERIAL);
-        _alloc.alloc = fl_manager_realloc;
-        _alloc.arg = NULL;
         _state = FLManagerStateIdle;
     }
     return self;
@@ -48,6 +37,12 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
 
 - (void)dealloc {
     [self unloadFonts];
+    [_task release];
+    [_stdinPipe release];
+    [_stdoutPipe release];
+    [_stderrPipe release];
+    [_stdoutBuffer release];
+    [_stderrBuffer release];
     [super dealloc];
 }
 
@@ -86,12 +81,12 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
 }
 
 - (void)finishWithState:(FLManagerState)state
-              generation:(NSUInteger)generation
-               numLoaded:(NSUInteger)numLoaded
-               numFailed:(NSUInteger)numFailed
-            numUnmatched:(NSUInteger)numUnmatched
-                   error:(NSError *)error
-              completion:(void(^)(FLManagerState, NSError *))completion {
+             generation:(NSUInteger)generation
+              numLoaded:(NSUInteger)numLoaded
+              numFailed:(NSUInteger)numFailed
+           numUnmatched:(NSUInteger)numUnmatched
+                  error:(NSError *)error
+             completion:(void(^)(FLManagerState, NSError *))completion {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != self->_generation) {
             return;
@@ -106,38 +101,161 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
     });
 }
 
-- (void)resetContextLocked {
-    if (_ctx == NULL) {
-        return;
+- (void)closeFileHandle:(NSFileHandle *)fileHandle {
+    @try {
+        [fileHandle closeFile];
+    } @catch (__unused NSException *exception) {
     }
-    fl_unload_fonts(_ctx);
-    fl_free(_ctx);
-    free(_ctx);
-    _ctx = NULL;
 }
 
-- (BOOL)prepareContextLocked:(NSError **)error {
-    [self resetContextLocked];
+- (void)clearTaskLocked {
+    if (_stdoutPipe != nil) {
+        _stdoutPipe.fileHandleForReading.readabilityHandler = nil;
+    }
+    if (_stderrPipe != nil) {
+        _stderrPipe.fileHandleForReading.readabilityHandler = nil;
+    }
+    [_task release];
+    _task = nil;
+    [_stdinPipe release];
+    _stdinPipe = nil;
+    [_stdoutPipe release];
+    _stdoutPipe = nil;
+    [_stderrPipe release];
+    _stderrPipe = nil;
+    [_stdoutBuffer release];
+    _stdoutBuffer = nil;
+    [_stderrBuffer release];
+    _stderrBuffer = nil;
+    _helperReady = NO;
+}
 
-    _ctx = calloc(1, sizeof(FL_LoaderCtx));
-    if (_ctx == NULL) {
-        if (error != NULL) {
-            *error = [self errorWithCode:FL_OUT_OF_MEMORY description:@"Out of memory."];
-        }
+- (void)shutdownTaskLocked {
+    if (_stdinPipe != nil) {
+        [self closeFileHandle:_stdinPipe.fileHandleForWriting];
+    }
+    if (_task != nil && _task.isRunning) {
+        [_task waitUntilExit];
+    }
+    [self clearTaskLocked];
+}
+
+- (void)terminateTaskLocked {
+    if (_stdinPipe != nil) {
+        [self closeFileHandle:_stdinPipe.fileHandleForWriting];
+    }
+    if (_task != nil && _task.isRunning) {
+        [_task terminate];
+        [_task waitUntilExit];
+    }
+    [self clearTaskLocked];
+}
+
+- (NSString *)helperExecutablePath {
+    return [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Contents/Helpers/fontloadersub"];
+}
+
+- (BOOL)parseReadyLine:(NSString *)line
+             numLoaded:(NSUInteger *)numLoaded
+             numFailed:(NSUInteger *)numFailed
+          numUnmatched:(NSUInteger *)numUnmatched {
+    NSScanner *scanner;
+    NSInteger loaded = 0;
+    NSInteger failed = 0;
+    NSInteger missing = 0;
+
+    if (![line hasPrefix:FLReadyPrefix]) {
         return NO;
     }
 
-    int result = fl_init(_ctx, &_alloc);
-    if (result != FL_OK) {
-        if (error != NULL) {
-            *error = [self errorWithCode:result description:@"Failed to initialize font loader."];
-        }
-        free(_ctx);
-        _ctx = NULL;
+    scanner = [NSScanner scannerWithString:[line substringFromIndex:FLReadyPrefix.length]];
+    if (![scanner scanString:@"loaded=" intoString:NULL] || ![scanner scanInteger:&loaded]) {
+        return NO;
+    }
+    if (![scanner scanString:@" failed=" intoString:NULL] || ![scanner scanInteger:&failed]) {
+        return NO;
+    }
+    if (![scanner scanString:@" missing=" intoString:NULL] || ![scanner scanInteger:&missing]) {
         return NO;
     }
 
+    if (numLoaded != NULL) {
+        *numLoaded = (NSUInteger)MAX(loaded, 0);
+    }
+    if (numFailed != NULL) {
+        *numFailed = (NSUInteger)MAX(failed, 0);
+    }
+    if (numUnmatched != NULL) {
+        *numUnmatched = (NSUInteger)MAX(missing, 0);
+    }
     return YES;
+}
+
+- (void)processOutputBuffer:(NSMutableData *)buffer
+                 generation:(NSUInteger)generation
+                   progress:(void(^)(NSString *message))progress
+                  numLoaded:(NSUInteger *)numLoaded
+                  numFailed:(NSUInteger *)numFailed
+               numUnmatched:(NSUInteger *)numUnmatched
+                onReadyLine:(void(^)(void))onReadyLine {
+    while (YES) {
+        const void *bytes = buffer.bytes;
+        NSUInteger length = buffer.length;
+        const void *newline = memchr(bytes, '\n', length);
+        NSRange lineRange;
+        NSData *lineData;
+        NSString *line;
+
+        if (newline == NULL) {
+            break;
+        }
+
+        lineRange = NSMakeRange(0, (const char *)newline - (const char *)bytes);
+        lineData = [buffer subdataWithRange:lineRange];
+        [buffer replaceBytesInRange:NSMakeRange(0, lineRange.length + 1) withBytes:NULL length:0];
+
+        line = [[[NSString alloc] initWithData:lineData encoding:NSUTF8StringEncoding] autorelease];
+        if (line == nil) {
+            continue;
+        }
+        if ([line hasSuffix:@"\r"]) {
+            line = [line substringToIndex:line.length - 1];
+        }
+        if (line.length == 0) {
+            continue;
+        }
+
+        if ([self parseReadyLine:line numLoaded:numLoaded numFailed:numFailed numUnmatched:numUnmatched]) {
+            _helperReady = YES;
+            if (onReadyLine != nil) {
+                onReadyLine();
+            }
+            continue;
+        }
+
+        [self publishProgress:line generation:generation handler:progress];
+    }
+}
+
+- (void)appendData:(NSData *)data
+          toBuffer:(NSMutableData *)buffer
+        generation:(NSUInteger)generation
+          progress:(void(^)(NSString *message))progress
+         numLoaded:(NSUInteger *)numLoaded
+         numFailed:(NSUInteger *)numFailed
+      numUnmatched:(NSUInteger *)numUnmatched
+       onReadyLine:(void(^)(void))onReadyLine {
+    if (data.length == 0) {
+        return;
+    }
+    [buffer appendData:data];
+    [self processOutputBuffer:buffer
+                   generation:generation
+                     progress:progress
+                    numLoaded:numLoaded
+                    numFailed:numFailed
+                 numUnmatched:numUnmatched
+                  onReadyLine:onReadyLine];
 }
 
 - (void)loadFontsForSubtitles:(NSArray<NSString *> *)subtitlePaths
@@ -156,41 +274,25 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
     _numUnmatched = 0;
 
     dispatch_async(_queue, ^{
+        NSString *helperPath = [self helperExecutablePath];
+        NSMutableArray<NSString *> *arguments = [NSMutableArray arrayWithObjects:@"--font-dir", fontDirCopy, nil];
+        __block NSUInteger numLoaded = 0;
+        __block NSUInteger numFailed = 0;
+        __block NSUInteger numUnmatched = 0;
+        __block BOOL completionSent = NO;
         NSError *error = nil;
-        FS_Stat stat = {0};
-        int result = FL_OK;
-        NSUInteger numLoaded = 0;
-        NSUInteger numFailed = 0;
-        NSUInteger numUnmatched = 0;
 
-        [self publishProgress:@"Scanning subtitles…" generation:generation handler:progressCopy];
+        [self terminateTaskLocked];
 
-        if (![self prepareContextLocked:&error]) {
+        if (![[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
+            error = [self errorWithCode:ENOENT description:@"Bundled CLI helper is missing."];
             [self finishWithState:FLManagerStateFailed
-                        generation:generation
-                         numLoaded:0
-                         numFailed:0
-                      numUnmatched:0
-                             error:error
-                        completion:completionCopy];
-            [subtitleCopy release];
-            [fontDirCopy release];
-            [progressCopy release];
-            [completionCopy release];
-            return;
-        }
-
-        wchar_t *fontDirW = FLNSStringToWChar(fontDirCopy);
-        if (fontDirW == NULL) {
-            error = [self errorWithCode:FL_OUT_OF_MEMORY description:@"Failed to convert font directory path."];
-            [self resetContextLocked];
-            [self finishWithState:FLManagerStateFailed
-                        generation:generation
-                         numLoaded:0
-                         numFailed:0
-                      numUnmatched:0
-                             error:error
-                        completion:completionCopy];
+                       generation:generation
+                        numLoaded:0
+                        numFailed:0
+                     numUnmatched:0
+                            error:error
+                       completion:completionCopy];
             [subtitleCopy release];
             [fontDirCopy release];
             [progressCopy release];
@@ -199,77 +301,123 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
         }
 
         for (NSString *subtitlePath in subtitleCopy) {
-            wchar_t *subtitleW = FLNSStringToWChar(subtitlePath);
-            if (subtitleW == NULL) {
-                result = FL_OUT_OF_MEMORY;
-                break;
-            }
-            result = fl_add_subs(_ctx, subtitleW);
-            free(subtitleW);
-            if (result != FL_OK && result != FL_OS_ERROR) {
-                break;
-            }
-            result = FL_OK;
+            [arguments addObject:@"--subtitle"];
+            [arguments addObject:subtitlePath];
         }
 
-        if (result == FL_OK) {
-            [self publishProgress:@"Loading font cache…" generation:generation handler:progressCopy];
-            result = fl_scan_fonts(_ctx, fontDirW, kCacheFile, kBlackFile);
-            if (_ctx->font_set != NULL) {
-                fs_stat(_ctx->font_set, &stat);
-            }
-        }
+        _task = [[NSTask alloc] init];
+        _stdinPipe = [[NSPipe alloc] init];
+        _stdoutPipe = [[NSPipe alloc] init];
+        _stderrPipe = [[NSPipe alloc] init];
+        _stdoutBuffer = [[NSMutableData alloc] init];
+        _stderrBuffer = [[NSMutableData alloc] init];
+        _helperReady = NO;
 
-        if (result == FL_OK && stat.num_face == 0) {
-            [self publishProgress:@"Scanning font files…" generation:generation handler:progressCopy];
-            result = fl_scan_fonts(_ctx, fontDirW, NULL, kBlackFile);
-            if (result == FL_OK) {
-                fl_save_cache(_ctx, kCacheFile);
-            }
-        }
+        _task.launchPath = helperPath;
+        _task.arguments = arguments;
+        _task.standardInput = _stdinPipe;
+        _task.standardOutput = _stdoutPipe;
+        _task.standardError = _stderrPipe;
 
-        if (result == FL_OK) {
-            [self publishProgress:@"Loading fonts…" generation:generation handler:progressCopy];
-            result = fl_load_fonts(_ctx);
-        }
+        _stdoutPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fileHandle) {
+            NSData *data = [fileHandle availableData];
+            dispatch_async(self->_queue, ^{
+                if (generation != self->_generation || self->_stdoutBuffer == nil) {
+                    return;
+                }
+                [self appendData:data
+                        toBuffer:self->_stdoutBuffer
+                      generation:generation
+                        progress:progressCopy
+                       numLoaded:&numLoaded
+                       numFailed:&numFailed
+                    numUnmatched:&numUnmatched
+                     onReadyLine:^{
+                         if (!completionSent) {
+                             completionSent = YES;
+                             [self finishWithState:FLManagerStateLoaded
+                                        generation:generation
+                                         numLoaded:numLoaded
+                                         numFailed:numFailed
+                                      numUnmatched:numUnmatched
+                                             error:nil
+                                        completion:completionCopy];
+                         }
+                     }];
+            });
+        };
 
-        free(fontDirW);
+        _stderrPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fileHandle) {
+            NSData *data = [fileHandle availableData];
+            dispatch_async(self->_queue, ^{
+                if (generation != self->_generation || self->_stderrBuffer == nil) {
+                    return;
+                }
+                [self appendData:data
+                        toBuffer:self->_stderrBuffer
+                      generation:generation
+                        progress:progressCopy
+                       numLoaded:NULL
+                       numFailed:NULL
+                    numUnmatched:NULL
+                     onReadyLine:nil];
+            });
+        };
 
-        if (result == FL_OK) {
-            numLoaded = _ctx->num_font_loaded;
-            numFailed = _ctx->num_font_failed;
-            numUnmatched = _ctx->num_font_unmatched;
-            [self publishProgress:@"Fonts loaded." generation:generation handler:progressCopy];
-            [self finishWithState:FLManagerStateLoaded
-                        generation:generation
-                         numLoaded:numLoaded
-                         numFailed:numFailed
-                      numUnmatched:numUnmatched
-                             error:nil
-                        completion:completionCopy];
-        } else {
-            error = [self errorWithCode:result description:@"Failed to load fonts."];
-            [self resetContextLocked];
+        _task.terminationHandler = ^(NSTask *task) {
+            dispatch_async(self->_queue, ^{
+                NSString *stderrText;
+                if (generation != self->_generation) {
+                    return;
+                }
+                self->_stdoutPipe.fileHandleForReading.readabilityHandler = nil;
+                self->_stderrPipe.fileHandleForReading.readabilityHandler = nil;
+                if (!completionSent && !self->_helperReady) {
+                    stderrText = [[[NSString alloc] initWithData:self->_stderrBuffer encoding:NSUTF8StringEncoding] autorelease];
+                    if (stderrText.length == 0) {
+                        stderrText = @"Failed to load fonts.";
+                    }
+                    completionSent = YES;
+                    [self finishWithState:FLManagerStateFailed
+                               generation:generation
+                                numLoaded:0
+                                numFailed:0
+                             numUnmatched:0
+                                    error:[self errorWithCode:task.terminationStatus description:stderrText]
+                               completion:completionCopy];
+                }
+                [self clearTaskLocked];
+                [subtitleCopy release];
+                [fontDirCopy release];
+                [progressCopy release];
+                [completionCopy release];
+            });
+        };
+
+        @try {
+            [_task launch];
+        } @catch (NSException *exception) {
+            error = [self errorWithCode:EIO description:exception.reason ?: @"Failed to start bundled CLI helper."];
+            [self clearTaskLocked];
             [self finishWithState:FLManagerStateFailed
-                        generation:generation
-                         numLoaded:0
-                         numFailed:0
-                      numUnmatched:0
-                             error:error
-                        completion:completionCopy];
+                       generation:generation
+                        numLoaded:0
+                        numFailed:0
+                     numUnmatched:0
+                            error:error
+                       completion:completionCopy];
+            [subtitleCopy release];
+            [fontDirCopy release];
+            [progressCopy release];
+            [completionCopy release];
         }
-
-        [subtitleCopy release];
-        [fontDirCopy release];
-        [progressCopy release];
-        [completionCopy release];
     });
 }
 
 - (void)unloadFonts {
     _generation++;
     dispatch_sync(_queue, ^{
-        [self resetContextLocked];
+        [self shutdownTaskLocked];
     });
     _state = FLManagerStateIdle;
     _numLoaded = 0;
@@ -279,15 +427,13 @@ static void *fl_manager_realloc(void *existing, size_t size, void *arg) {
 
 - (void)cancel {
     _generation++;
+    dispatch_async(_queue, ^{
+        [self terminateTaskLocked];
+    });
     _state = FLManagerStateIdle;
     _numLoaded = 0;
     _numFailed = 0;
     _numUnmatched = 0;
-    dispatch_async(_queue, ^{
-        if (self->_ctx != NULL) {
-            fl_cancel(self->_ctx);
-        }
-    });
 }
 
 @end

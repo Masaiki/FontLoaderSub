@@ -85,9 +85,19 @@ if(APPLE)
             ${GUI_SOURCES}
         )
 
+        add_dependencies(FontLoaderSubGUI fontloadersub)
+
         set_target_properties(FontLoaderSubGUI PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST
                 "${CMAKE_CURRENT_SOURCE_DIR}/FontLoaderSub/mac_gui/Info.plist"
+        )
+
+        add_custom_command(TARGET FontLoaderSubGUI POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_FILE_DIR:FontLoaderSubGUI>/../Helpers"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:fontloadersub>"
+                "$<TARGET_FILE_DIR:FontLoaderSubGUI>/../Helpers/fontloadersub"
         )
 
         target_include_directories(FontLoaderSubGUI PRIVATE

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Windows.h>
+#include "platform.h"
 #include <stdint.h>
 
 enum FL_STATUS {
@@ -12,13 +12,13 @@ enum FL_STATUS {
   FL_DUP = 5,
 };
 
-inline uint16_t be16(uint16_t v) {
+static inline uint16_t be16(uint16_t v) {
   // check if compiles to `XCHG`
   // alter: _byteswap_ushort
   return (v >> 8) | (v << 8);
 }
 
-inline uint32_t be32(uint32_t num) {
+static inline uint32_t be32(uint32_t num) {
   // check if compiles to `BSWAP`
   // alter: _byteswap_ulong
   return ((num >> 24) & 0xff) |       // move byte 3 to byte 0
@@ -27,7 +27,7 @@ inline uint32_t be32(uint32_t num) {
          ((num << 24) & 0xff000000);  // byte 0 to byte 3
 }
 
-inline void FlBreak() {
+static inline void FlBreak() {
   // DebugBreak();
 }
 
@@ -37,7 +37,9 @@ typedef struct _allocator_t {
 } allocator_t;
 
 typedef struct {
+#ifdef _WIN32
   HANDLE map;
+#endif
   void *data;
   size_t size;
 } memmap_t;
@@ -53,9 +55,11 @@ int FlVersionCmp(const wchar_t *a, const wchar_t *b);
 
 int FlStrCmpIW(const wchar_t *a, const wchar_t *b);
 
+#ifdef _WIN32
 BOOL PerMonitorDpiHack();
 
 const TCHAR *ResLoadString(HMODULE hInstance, UINT idText);
+#endif
 
 void *zmemset(void *dest, int ch, size_t count);
 

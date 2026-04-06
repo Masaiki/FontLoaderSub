@@ -6,6 +6,10 @@
 #include "tim_sort.h"
 #include "util.h"
 
+#ifndef _WIN32
+#  include <stdio.h>
+#endif
+
 #define MAKE_TAG(a, b, c, d)                                             \
   ((uint32_t)(((uint8_t)(d) << 24)) | (uint32_t)(((uint8_t)(c) << 16)) | \
    (uint32_t)(((uint8_t)(b) << 8)) | (uint32_t)(((uint8_t)(a))))
@@ -43,13 +47,13 @@ typedef struct {
 #define kTagError L"\t!!"
 #define kTagErrorLen (3)
 
-static const WCHAR kFsFmtTag[FS_FmtMax][4] = {  // format hack
+static const wchar_t kFsFmtTag[FS_FmtMax][4] = {  // format hack
     [FS_FmtNone] = L"",
     [FS_FmtOTF] = L"otf",
     [FS_FmtTTF] = L"ttf",
     [FS_FmtTTC] = L"ttc"};
 
-static void fs_format_tag_to_str(FS_Format fmt, WCHAR s[4]);
+static void fs_format_tag_to_str(FS_Format fmt, wchar_t s[4]);
 
 static int fs_parser_name_cb(
     uint32_t font_id,
@@ -153,7 +157,7 @@ int fs_add_font(FS_Set *s, const wchar_t *tag, void *buf, size_t size) {
   size_t pos_db = 0, pos_db_fmt = 0;
 
   FS_ParseCtx ctx;
-  WCHAR fmt[4];
+  wchar_t fmt[4];
   do {
     if (str_db_push_u16_le(db, tag, 0) == NULL)
       break;
@@ -236,7 +240,7 @@ static int fs_idx_comp(const void *pa, const void *pb, void *arg) {
   return cmp;
 }
 
-static FS_Format fs_format_str_to_tag(const WCHAR s[4]) {
+static FS_Format fs_format_str_to_tag(const wchar_t s[4]) {
   for (int i = 0; i != FS_FmtMax; i++) {
     if (ass_strncmp(s, kFsFmtTag[i], 4) == 0) {
       return (FS_Format)i;
@@ -245,7 +249,7 @@ static FS_Format fs_format_str_to_tag(const WCHAR s[4]) {
   return FS_FmtNone;
 }
 
-static void fs_format_tag_to_str(FS_Format fmt, WCHAR s[4]) {
+static void fs_format_tag_to_str(FS_Format fmt, wchar_t s[4]) {
   int i = fmt;
   if (FS_FmtNone <= i && i < FS_FmtMax) {
     zmemcpy(s, kFsFmtTag[i], sizeof kFsFmtTag[i]);
@@ -254,7 +258,8 @@ static void fs_format_tag_to_str(FS_Format fmt, WCHAR s[4]) {
   }
 }
 
-static void fs_debug_write_line(HANDLE f, const WCHAR *line) {
+#ifdef _WIN32
+static void fs_debug_write_line(HANDLE f, const wchar_t *line) {
   SIZE_T nb = lstrlen(line) * sizeof line[0];
   SIZE_T out = 0;
   WriteFile(f, line, nb, &out, NULL);
@@ -265,7 +270,7 @@ static void fs_index_debug_dump(FS_Set *s) {
       L"FontIndexDebugDump.txt", GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
       FILE_ATTRIBUTE_NORMAL, NULL);
   for (unsigned int i = 0; i != s->stat.num_face; i++) {
-    WCHAR fmt[4];
+    wchar_t fmt[4];
     fs_format_tag_to_str(s->index[i].format, fmt);
     fs_debug_write_line(f, L"[");
     fs_debug_write_line(f, fmt);
@@ -279,6 +284,7 @@ static void fs_index_debug_dump(FS_Set *s) {
   }
   CloseHandle(f);
 }
+#endif
 
 int fs_build_index(FS_Set *s) {
   allocator_t *alloc = s->alloc;
@@ -503,6 +509,14 @@ int fs_cache_load(const wchar_t *path, allocator_t *alloc, FS_Set **out) {
 
 int fs_cache_dump(FS_Set *s, const wchar_t *path) {
   int ok = 0;
+  const wchar_t *buf = str_db_get(&s->db, 0);
+  FS_CacheHeader head = {
+      .magic = KFontDbMagic,
+      .stat = s->stat,
+      .size =
+          (uint32_t)(sizeof head + str_db_tell(&s->db) * sizeof buf[0])};
+
+#ifdef _WIN32
   DWORD flags = FILE_ATTRIBUTE_NORMAL;
   if (s->stat.num_file == 0)
     flags |= FILE_FLAG_DELETE_ON_CLOSE;
@@ -512,12 +526,6 @@ int fs_cache_dump(FS_Set *s, const wchar_t *path) {
   do {
     if (h == INVALID_HANDLE_VALUE)
       break;
-    const wchar_t *buf = str_db_get(&s->db, 0);
-    FS_CacheHeader head = {
-        .magic = KFontDbMagic,
-        .stat = s->stat,
-        .size = sizeof head + str_db_tell(&s->db) * sizeof buf[0]};
-
     DWORD dw_out;
     if (!WriteFile(h, &head, sizeof head, &dw_out, NULL))
       break;
@@ -525,8 +533,31 @@ int fs_cache_dump(FS_Set *s, const wchar_t *path) {
       break;
     ok = 1;
   } while (0);
-
   CloseHandle(h);
+#else
+  /* Convert wchar_t path to UTF-8 for POSIX fopen */
+  extern int fl_wchar_to_utf8(const wchar_t *w, char *buf, size_t sz);
+  char utf8_path[4096];
+  fl_wchar_to_utf8(path, utf8_path, sizeof utf8_path);
+
+  FILE *f = fopen(utf8_path, "wb");
+  do {
+    if (!f)
+      break;
+    if (fwrite(&head, 1, sizeof head, f) != sizeof head)
+      break;
+    const size_t data_bytes = str_db_tell(&s->db) * sizeof buf[0];
+    if (data_bytes > 0 && fwrite(buf, 1, data_bytes, f) != data_bytes)
+      break;
+    /* Delete empty cache file on close */
+    if (s->stat.num_file == 0)
+      remove(utf8_path);
+    ok = 1;
+  } while (0);
+  if (f)
+    fclose(f);
+#endif
+
   return ok ? FL_OK : FL_OS_ERROR;
 }
 
@@ -551,7 +582,7 @@ int fs_blacklist_match(FS_Set *s, const wchar_t *path) {
     }
     const wchar_t *path_sfx = path + len_path - len_suffix;
     if (ass_strncasecmp(path_sfx, suffix, len_suffix) == 0) {
-      if (len_path == len_suffix || path_sfx[-1] == '\\') {
+      if (len_path == len_suffix || path_sfx[-1] == OS_PATH_SEP_CHAR) {
         return 1;
       }
     }

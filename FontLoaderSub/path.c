@@ -47,7 +47,7 @@ int FlResolvePath(const wchar_t *path, str_db_t *s) {
 size_t FlPathParent(str_db_t *path) {
   size_t pos = str_db_tell(path);
   wchar_t *buf = (wchar_t *)str_db_get(path, 0);
-  while (pos != 0 && buf[pos - 1] != L'\\')
+  while (pos != 0 && buf[pos - 1] != OS_PATH_SEP_CHAR)
     pos--;
   buf[pos] = 0;
   str_db_seek(path, pos);
@@ -83,7 +83,8 @@ static int WalkDirDfs(FL_WalkDirCtx *ctx) {
       }
       if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
         // it's a directory, append \*
-        const wchar_t *search = str_db_push_u16_le(&ctx->path, L"\\*", 2);
+        const wchar_t *search =
+            str_db_push_u16_le(&ctx->path, OS_PATH_SEP L"*", 2);
         if (search == NULL) {
           r = FL_OUT_OF_MEMORY;
           break;
@@ -92,7 +93,12 @@ static int WalkDirDfs(FL_WalkDirCtx *ctx) {
       } else {
         // it's a file, fire callback
         const wchar_t *full = str_db_get(&ctx->path, 0);
-        r = ctx->callback(full, &fd, ctx->arg);
+        FL_FileInfo info = {
+            .file_size = ((uint64_t)fd.nFileSizeHigh << 32) | fd.nFileSizeLow,
+            .is_regular_file =
+                !(fd.dwFileAttributes &
+                  (FILE_ATTRIBUTE_DEVICE | FILE_ATTRIBUTE_DIRECTORY))};
+        r = ctx->callback(full, &info, ctx->arg);
       }
     }
   } while (r == FL_OK && FindNextFile(find_handle, &fd));
@@ -131,3 +137,4 @@ int FlWalkDirStr(str_db_t *path, FL_FileWalkCb callback, void *arg) {
   *path = ctx.path;
   return r;
 }
+

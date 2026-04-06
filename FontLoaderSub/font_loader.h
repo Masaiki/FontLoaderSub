@@ -57,7 +57,7 @@ int fl_load_fonts(FL_LoaderCtx *c);
 
 int fl_unload_fonts(FL_LoaderCtx *c);
 
-int fl_cache_fonts(FL_LoaderCtx *c, HANDLE evt_cancel);
+int fl_cache_fonts(FL_LoaderCtx *c, void *evt_cancel);
 
 typedef int (*WalkLoadedCallback)(
     FL_LoaderCtx *c,

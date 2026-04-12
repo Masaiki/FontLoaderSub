@@ -2,21 +2,36 @@
 
 #import "FLManager.h"
 
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+
 static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
 
 @interface AppDelegate () {
     NSStatusItem *_statusItem;
     NSMenu *_menu;
     NSMenuItem *_statusMenuItem;
+    NSMenuItem *_logMenuItem;
+    NSMenuItem *_loadMenuItem;
     NSMenuItem *_unloadMenuItem;
     NSMenuItem *_fontDirectoryMenuItem;
     FLManager *_manager;
+    NSPanel *_detailPanel;
+    NSPanel *_logPanel;
 }
 @end
 
 @implementation AppDelegate
 
 - (void)dealloc {
+    [_detailPanel release];
+    [_logPanel release];
+    [_statusItem release];
+    [_menu release];
+    [_statusMenuItem release];
+    [_logMenuItem release];
+    [_loadMenuItem release];
+    [_unloadMenuItem release];
+    [_fontDirectoryMenuItem release];
     [_manager release];
     [super dealloc];
 }
@@ -29,7 +44,7 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
     [self updateMenuForStatus:@"Idle"];
 
     [NSApp setServicesProvider:self];
-    [NSApp registerServicesMenuSendTypes:@[NSFilenamesPboardType, NSPasteboardTypeFileURL] returnTypes:@[]];
+    [NSApp registerServicesMenuSendTypes:@[NSPasteboardTypeFileURL] returnTypes:@[]];
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
@@ -49,8 +64,7 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
         }
         image.template = YES;
         _statusItem.button.image = image;
-    } else {
-        _statusItem.title = @"FLS";
+        _statusItem.button.title = @"";
     }
 
     _menu = [[NSMenu alloc] initWithTitle:@"FontLoaderSub"];
@@ -63,11 +77,16 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
     _statusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Status: Idle" action:nil keyEquivalent:@""];
     _statusMenuItem.enabled = NO;
     [_menu addItem:_statusMenuItem];
+
+    _logMenuItem = [[NSMenuItem alloc] initWithTitle:@"View Log…" action:@selector(showLog:) keyEquivalent:@""];
+    _logMenuItem.target = self;
+    [_menu addItem:_logMenuItem];
+
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    NSMenuItem *loadItem = [[[NSMenuItem alloc] initWithTitle:@"Load Fonts…" action:@selector(loadFontsFromMenu:) keyEquivalent:@""] autorelease];
-    loadItem.target = self;
-    [_menu addItem:loadItem];
+    _loadMenuItem = [[NSMenuItem alloc] initWithTitle:@"Load Fonts…" action:@selector(loadFontsFromMenu:) keyEquivalent:@""];
+    _loadMenuItem.target = self;
+    [_menu addItem:_loadMenuItem];
 
     _unloadMenuItem = [[NSMenuItem alloc] initWithTitle:@"Unload Fonts" action:@selector(unloadFontsFromMenu:) keyEquivalent:@""];
     _unloadMenuItem.target = self;
@@ -105,7 +124,20 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
 
 - (void)updateMenuForStatus:(NSString *)statusText {
     _statusMenuItem.title = [NSString stringWithFormat:@"Status: %@", statusText ?: @"Idle"];
-    _unloadMenuItem.enabled = (_manager.state == FLManagerStateLoaded);
+    BOOL loading = (_manager.state == FLManagerStateLoading);
+    BOOL loaded = (_manager.state == FLManagerStateLoaded);
+    _loadMenuItem.enabled = !loading;
+    _unloadMenuItem.enabled = loaded;
+
+    if (loaded && _manager.detailLines.count > 0) {
+        _statusMenuItem.action = @selector(showLoadDetails:);
+        _statusMenuItem.target = self;
+        _statusMenuItem.enabled = YES;
+    } else {
+        _statusMenuItem.action = nil;
+        _statusMenuItem.target = nil;
+        _statusMenuItem.enabled = NO;
+    }
 
     NSString *fontDir = [self defaultFontDirectory];
     if (fontDir.length > 0) {
@@ -124,13 +156,6 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
     for (NSURL *url in urls) {
         if (url.isFileURL) {
             [paths addObject:url.path];
-        }
-    }
-
-    if (paths.count == 0) {
-        NSArray<NSString *> *fallback = [pboard propertyListForType:NSFilenamesPboardType];
-        for (NSString *path in fallback) {
-            [paths addObject:path];
         }
     }
 
@@ -183,8 +208,10 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
     subtitlePanel.canChooseFiles = YES;
     subtitlePanel.canChooseDirectories = YES;
     subtitlePanel.allowsMultipleSelection = YES;
-    subtitlePanel.allowedFileTypes = @[@"ass", @"ssa"];
-    subtitlePanel.allowsOtherFileTypes = NO;
+    subtitlePanel.allowedContentTypes = @[
+        [UTType typeWithFilenameExtension:@"ass"],
+        [UTType typeWithFilenameExtension:@"ssa"],
+    ];
 
     if ([subtitlePanel runModal] != NSModalResponseOK) {
         return;
@@ -245,6 +272,138 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
     [NSApp terminate:nil];
 }
 
+- (IBAction)showLoadDetails:(id)sender {
+    (void)sender;
+    NSArray<NSString *> *lines = _manager.detailLines;
+    if (lines.count == 0) {
+        return;
+    }
+
+    if (_detailPanel == nil) {
+        NSRect frame = NSMakeRect(0, 0, 560, 400);
+        _detailPanel = [[NSPanel alloc] initWithContentRect:frame
+                                                  styleMask:(NSWindowStyleMaskTitled |
+                                                             NSWindowStyleMaskClosable |
+                                                             NSWindowStyleMaskResizable)
+                                                    backing:NSBackingStoreBuffered
+                                                      defer:YES];
+        _detailPanel.title = @"Font Load Details";
+        _detailPanel.releasedWhenClosed = NO;
+        [_detailPanel center];
+
+        NSScrollView *scrollView = [[[NSScrollView alloc] initWithFrame:frame] autorelease];
+        scrollView.hasVerticalScroller = YES;
+        scrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+
+        NSTextView *textView = [[[NSTextView alloc] initWithFrame:scrollView.contentView.bounds] autorelease];
+        textView.editable = NO;
+        textView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        textView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+        textView.textContainerInset = NSMakeSize(8, 8);
+
+        scrollView.documentView = textView;
+        _detailPanel.contentView = scrollView;
+    }
+
+    NSTextView *textView = (NSTextView *)((NSScrollView *)_detailPanel.contentView).documentView;
+    [textView.textStorage setAttributedString:[[[NSAttributedString alloc]
+        initWithString:[lines componentsJoinedByString:@"\n"]
+            attributes:@{
+                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
+            }] autorelease]];
+
+    [_detailPanel makeKeyAndOrderFront:nil];
+    [NSApp activate];
+}
+
+- (IBAction)showLog:(id)sender {
+    (void)sender;
+
+    if (_logPanel == nil) {
+        NSRect frame = NSMakeRect(0, 0, 600, 450);
+        _logPanel = [[NSPanel alloc] initWithContentRect:frame
+                                               styleMask:(NSWindowStyleMaskTitled |
+                                                          NSWindowStyleMaskClosable |
+                                                          NSWindowStyleMaskResizable)
+                                                 backing:NSBackingStoreBuffered
+                                                   defer:YES];
+        _logPanel.title = @"Load Log";
+        _logPanel.releasedWhenClosed = NO;
+        [_logPanel center];
+
+        NSButton *clearButton = [[[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 80, 32)] autorelease];
+        clearButton.title = @"Clear Log";
+        clearButton.bezelStyle = NSBezelStyleRounded;
+        clearButton.target = self;
+        clearButton.action = @selector(clearLog:);
+        clearButton.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSScrollView *scrollView = [[[NSScrollView alloc] initWithFrame:NSZeroRect] autorelease];
+        scrollView.hasVerticalScroller = YES;
+        scrollView.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextView *textView = [[[NSTextView alloc] initWithFrame:scrollView.contentView.bounds] autorelease];
+        textView.editable = NO;
+        textView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+        textView.font = [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular];
+        textView.textContainerInset = NSMakeSize(8, 8);
+        scrollView.documentView = textView;
+
+        NSView *contentView = [[[NSView alloc] initWithFrame:frame] autorelease];
+        [contentView addSubview:scrollView];
+        [contentView addSubview:clearButton];
+        _logPanel.contentView = contentView;
+
+        [NSLayoutConstraint activateConstraints:@[
+            [clearButton.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor constant:-8],
+            [clearButton.bottomAnchor constraintEqualToAnchor:contentView.bottomAnchor constant:-8],
+            [scrollView.topAnchor constraintEqualToAnchor:contentView.topAnchor],
+            [scrollView.leadingAnchor constraintEqualToAnchor:contentView.leadingAnchor],
+            [scrollView.trailingAnchor constraintEqualToAnchor:contentView.trailingAnchor],
+            [scrollView.bottomAnchor constraintEqualToAnchor:clearButton.topAnchor constant:-8],
+        ]];
+    }
+
+    NSScrollView *scrollView = nil;
+    for (NSView *subview in _logPanel.contentView.subviews) {
+        if ([subview isKindOfClass:[NSScrollView class]]) {
+            scrollView = (NSScrollView *)subview;
+            break;
+        }
+    }
+    NSTextView *textView = (NSTextView *)scrollView.documentView;
+    NSString *log = _manager.logText ?: @"";
+    [textView.textStorage setAttributedString:[[[NSAttributedString alloc]
+        initWithString:log
+            attributes:@{
+                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
+            }] autorelease]];
+
+    [_logPanel makeKeyAndOrderFront:nil];
+    [NSApp activate];
+}
+
+- (IBAction)clearLog:(id)sender {
+    (void)sender;
+    [_manager clearLog];
+
+    if (_logPanel != nil) {
+        NSScrollView *scrollView = nil;
+        for (NSView *subview in _logPanel.contentView.subviews) {
+            if ([subview isKindOfClass:[NSScrollView class]]) {
+                scrollView = (NSScrollView *)subview;
+                break;
+            }
+        }
+        NSTextView *textView = (NSTextView *)scrollView.documentView;
+        [textView.textStorage setAttributedString:[[[NSAttributedString alloc]
+            initWithString:@""
+                attributes:@{
+                    NSFontAttributeName: [NSFont monospacedSystemFontOfSize:12 weight:NSFontWeightRegular]
+                }] autorelease]];
+    }
+}
+
 - (void)loadFontsFromService:(NSPasteboard *)pboard userData:(NSString *)userData error:(NSString **)error {
     (void)userData;
 
@@ -264,7 +423,7 @@ static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
         return;
     }
 
-    [NSApp activateIgnoringOtherApps:YES];
+    [NSApp activate];
     [self startLoadingSubtitlePaths:subtitlePaths fontDirectory:fontDirectory];
 }
 

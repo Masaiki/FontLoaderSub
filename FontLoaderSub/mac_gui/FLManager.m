@@ -21,6 +21,8 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     NSMutableData *_stdoutBuffer;
     NSMutableData *_stderrBuffer;
     BOOL _helperReady;
+    NSMutableArray<NSString *> *_detailLines;
+    NSMutableString *_logText;
 }
 @end
 
@@ -31,12 +33,15 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     if (self) {
         _queue = dispatch_queue_create("com.fontloadersub.worker", DISPATCH_QUEUE_SERIAL);
         _state = FLManagerStateIdle;
+        _logText = [[NSMutableString alloc] init];
     }
     return self;
 }
 
 - (void)dealloc {
     [self unloadFonts];
+    [_detailLines release];
+    [_logText release];
     [_task release];
     [_stdinPipe release];
     [_stdoutPipe release];
@@ -60,6 +65,23 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 
 - (NSUInteger)numUnmatched {
     return _numUnmatched;
+}
+
+- (NSArray<NSString *> *)detailLines {
+    return [[_detailLines copy] autorelease];
+}
+
+- (NSString *)logText {
+    return [[_logText copy] autorelease];
+}
+
+- (void)clearLog {
+    [_logText setString:@""];
+}
+
+- (void)appendLog:(NSString *)line {
+    [_logText appendString:line];
+    [_logText appendString:@"\n"];
 }
 
 - (NSError *)errorWithCode:(NSInteger)code description:(NSString *)description {
@@ -87,6 +109,10 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
            numUnmatched:(NSUInteger)numUnmatched
                   error:(NSError *)error
              completion:(void(^)(FLManagerState, NSError *))completion {
+    if (state != FLManagerStateLoaded) {
+        [self appendLog:[NSString stringWithFormat:@"Error: %@", error.localizedDescription ?: @"Failed"]];
+    }
+    [self appendLog:@""];
     dispatch_async(dispatch_get_main_queue(), ^{
         if (generation != self->_generation) {
             return;
@@ -128,16 +154,6 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     [_stderrBuffer release];
     _stderrBuffer = nil;
     _helperReady = NO;
-}
-
-- (void)shutdownTaskLocked {
-    if (_stdinPipe != nil) {
-        [self closeFileHandle:_stdinPipe.fileHandleForWriting];
-    }
-    if (_task != nil && _task.isRunning) {
-        [_task waitUntilExit];
-    }
-    [self clearTaskLocked];
 }
 
 - (void)terminateTaskLocked {
@@ -193,6 +209,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 
 - (void)processOutputBuffer:(NSMutableData *)buffer
                  generation:(NSUInteger)generation
+                   isStderr:(BOOL)isStderr
                    progress:(void(^)(NSString *message))progress
                   numLoaded:(NSUInteger *)numLoaded
                   numFailed:(NSUInteger *)numFailed
@@ -233,6 +250,23 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
             continue;
         }
 
+        if (isStderr) {
+            [self appendLog:[NSString stringWithFormat:@"[stderr] %@", line]];
+        } else {
+            [self appendLog:line];
+        }
+
+        if ([line hasPrefix:@"["]) {
+            [_detailLines addObject:line];
+            if (numLoaded != NULL && [line hasPrefix:@"[ok]"]) {
+                (*numLoaded)++;
+            } else if (numFailed != NULL && [line hasPrefix:@"[ X]"]) {
+                (*numFailed)++;
+            } else if (numUnmatched != NULL && [line hasPrefix:@"[---]"]) {
+                (*numUnmatched)++;
+            }
+        }
+
         [self publishProgress:line generation:generation handler:progress];
     }
 }
@@ -240,6 +274,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 - (void)appendData:(NSData *)data
           toBuffer:(NSMutableData *)buffer
         generation:(NSUInteger)generation
+          isStderr:(BOOL)isStderr
           progress:(void(^)(NSString *message))progress
          numLoaded:(NSUInteger *)numLoaded
          numFailed:(NSUInteger *)numFailed
@@ -251,6 +286,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     [buffer appendData:data];
     [self processOutputBuffer:buffer
                    generation:generation
+                     isStderr:isStderr
                      progress:progress
                     numLoaded:numLoaded
                     numFailed:numFailed
@@ -272,6 +308,16 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     _numLoaded = 0;
     _numFailed = 0;
     _numUnmatched = 0;
+    [_detailLines release];
+    _detailLines = [[NSMutableArray alloc] init];
+
+    NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
+    fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    [self appendLog:[NSString stringWithFormat:@"--- %@ ---", [fmt stringFromDate:[NSDate date]]]];
+    for (NSString *path in subtitlePaths) {
+        [self appendLog:[NSString stringWithFormat:@"Subtitle: %@", path]];
+    }
+    [self appendLog:[NSString stringWithFormat:@"Font dir: %@", fontDir]];
 
     dispatch_async(_queue, ^{
         NSString *helperPath = [self helperExecutablePath];
@@ -328,6 +374,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
                 [self appendData:data
                         toBuffer:self->_stdoutBuffer
                       generation:generation
+                        isStderr:NO
                         progress:progressCopy
                        numLoaded:&numLoaded
                        numFailed:&numFailed
@@ -356,6 +403,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
                 [self appendData:data
                         toBuffer:self->_stderrBuffer
                       generation:generation
+                        isStderr:YES
                         progress:progressCopy
                        numLoaded:NULL
                        numFailed:NULL
@@ -366,31 +414,114 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 
         _task.terminationHandler = ^(NSTask *task) {
             dispatch_async(self->_queue, ^{
-                NSString *stderrText;
+                NSData *remainingOut;
+                NSData *remainingErr;
                 if (generation != self->_generation) {
                     return;
                 }
                 self->_stdoutPipe.fileHandleForReading.readabilityHandler = nil;
                 self->_stderrPipe.fileHandleForReading.readabilityHandler = nil;
-                if (!completionSent && !self->_helperReady) {
-                    stderrText = [[[NSString alloc] initWithData:self->_stderrBuffer encoding:NSUTF8StringEncoding] autorelease];
-                    if (stderrText.length == 0) {
-                        stderrText = @"Failed to load fonts.";
+
+                remainingOut = [self->_stdoutPipe.fileHandleForReading readDataToEndOfFile];
+                remainingErr = [self->_stderrPipe.fileHandleForReading readDataToEndOfFile];
+                [self appendData:remainingOut
+                        toBuffer:self->_stdoutBuffer
+                      generation:generation
+                        isStderr:NO
+                        progress:progressCopy
+                       numLoaded:&numLoaded
+                       numFailed:&numFailed
+                    numUnmatched:&numUnmatched
+                     onReadyLine:^{
+                         if (!completionSent) {
+                             completionSent = YES;
+                             [self finishWithState:FLManagerStateLoaded
+                                        generation:generation
+                                         numLoaded:numLoaded
+                                         numFailed:numFailed
+                                      numUnmatched:numUnmatched
+                                             error:nil
+                                        completion:completionCopy];
+                         }
+                     }];
+                [self appendData:remainingErr
+                        toBuffer:self->_stderrBuffer
+                      generation:generation
+                        isStderr:YES
+                        progress:progressCopy
+                       numLoaded:NULL
+                       numFailed:NULL
+                    numUnmatched:NULL
+                     onReadyLine:nil];
+
+                /* Drain: readabilityHandler blocks already dispatched to
+                   _queue may contain the FLS_READY line.  Re-dispatch so
+                   they execute first before we decide on failure. */
+                dispatch_async(self->_queue, ^{
+                    NSString *stderrText;
+                    if (generation != self->_generation) {
+                        return;
                     }
-                    completionSent = YES;
-                    [self finishWithState:FLManagerStateFailed
-                               generation:generation
-                                numLoaded:0
-                                numFailed:0
-                             numUnmatched:0
-                                    error:[self errorWithCode:task.terminationStatus description:stderrText]
-                               completion:completionCopy];
-                }
-                [self clearTaskLocked];
-                [subtitleCopy release];
-                [fontDirCopy release];
-                [progressCopy release];
-                [completionCopy release];
+
+                    /* Process any remaining data in stdout buffer (may lack
+                       trailing newline). */
+                    if (self->_stdoutBuffer.length > 0) {
+                        [self->_stdoutBuffer appendBytes:"\n" length:1];
+                        [self processOutputBuffer:self->_stdoutBuffer
+                                       generation:generation
+                                         isStderr:NO
+                                         progress:progressCopy
+                                        numLoaded:&numLoaded
+                                        numFailed:&numFailed
+                                     numUnmatched:&numUnmatched
+                                      onReadyLine:^{
+                                          if (!completionSent) {
+                                              completionSent = YES;
+                                              [self finishWithState:FLManagerStateLoaded
+                                                         generation:generation
+                                                          numLoaded:numLoaded
+                                                          numFailed:numFailed
+                                                       numUnmatched:numUnmatched
+                                                              error:nil
+                                                         completion:completionCopy];
+                                          }
+                                      }];
+                    }
+
+                    if (!completionSent && !self->_helperReady) {
+                        if (task.terminationStatus == 0) {
+                            /* Helper exited successfully — treat as loaded
+                               even if FLS_READY was not seen (e.g. no fonts
+                               needed to be loaded). */
+                            completionSent = YES;
+                            [self finishWithState:FLManagerStateLoaded
+                                       generation:generation
+                                        numLoaded:numLoaded
+                                        numFailed:numFailed
+                                     numUnmatched:numUnmatched
+                                            error:nil
+                                       completion:completionCopy];
+                        } else {
+                            stderrText = [[[NSString alloc] initWithData:self->_stderrBuffer encoding:NSUTF8StringEncoding] autorelease];
+                            if (stderrText.length == 0) {
+                                stderrText = @"Failed to load fonts.";
+                            }
+                            completionSent = YES;
+                            [self finishWithState:FLManagerStateFailed
+                                       generation:generation
+                                        numLoaded:0
+                                        numFailed:0
+                                     numUnmatched:0
+                                            error:[self errorWithCode:task.terminationStatus description:stderrText]
+                                       completion:completionCopy];
+                        }
+                    }
+                    [self clearTaskLocked];
+                    [subtitleCopy release];
+                    [fontDirCopy release];
+                    [progressCopy release];
+                    [completionCopy release];
+                });
             });
         };
 
@@ -414,26 +545,30 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     });
 }
 
-- (void)unloadFonts {
-    _generation++;
-    dispatch_sync(_queue, ^{
-        [self shutdownTaskLocked];
-    });
-    _state = FLManagerStateIdle;
+- (void)resetStateLocked {
     _numLoaded = 0;
     _numFailed = 0;
     _numUnmatched = 0;
+    [_detailLines release];
+    _detailLines = nil;
+}
+
+- (void)unloadFonts {
+    _generation++;
+    dispatch_sync(_queue, ^{
+        [self terminateTaskLocked];
+        [self resetStateLocked];
+    });
+    _state = FLManagerStateIdle;
 }
 
 - (void)cancel {
     _generation++;
-    dispatch_async(_queue, ^{
+    dispatch_sync(_queue, ^{
         [self terminateTaskLocked];
+        [self resetStateLocked];
     });
     _state = FLManagerStateIdle;
-    _numLoaded = 0;
-    _numFailed = 0;
-    _numUnmatched = 0;
 }
 
 @end

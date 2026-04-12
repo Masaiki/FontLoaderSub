@@ -12,6 +12,8 @@ typedef NS_ENUM(NSInteger, FLManagerState) {
 @property (readonly) NSUInteger numLoaded;
 @property (readonly) NSUInteger numFailed;
 @property (readonly) NSUInteger numUnmatched;
+@property (readonly, copy) NSArray<NSString *> *detailLines;
+@property (readonly, copy) NSString *logText;
 
 - (void)loadFontsForSubtitles:(NSArray<NSString *> *)subtitlePaths
                       fontDir:(NSString *)fontDir
@@ -19,4 +21,5 @@ typedef NS_ENUM(NSInteger, FLManagerState) {
                    completion:(void(^)(FLManagerState state, NSError *error))completion;
 - (void)unloadFonts;
 - (void)cancel;
+- (void)clearLog;
 @end

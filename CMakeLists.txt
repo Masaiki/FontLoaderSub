@@ -25,10 +25,6 @@ set(COMMON_SOURCES
 # Platform-specific configuration
 # --------------------------------------------------------------------------
 if(APPLE)
-    # Make wchar_t 2 bytes (UTF-16) to match the Windows behaviour assumed
-    # throughout the code base.
-    add_compile_options(-fshort-wchar)
-
     set(CLI_SOURCES
         FontLoaderSub/util_posix.c
         FontLoaderSub/path_posix.c
@@ -43,8 +39,8 @@ if(APPLE)
     option(MACOS_GUI "Build macOS menu-bar .app bundle" OFF)
     if(MACOS_GUI)
         find_library(APP_KIT_LIB AppKit REQUIRED)
+        find_library(UNIFORM_TYPE_LIB UniformTypeIdentifiers REQUIRED)
         set(GUI_SOURCES
-            FontLoaderSub/mac_gui/FLBridge.m
             FontLoaderSub/mac_gui/FLManager.m
             FontLoaderSub/mac_gui/AppDelegate.m
             FontLoaderSub/mac_gui/main_mac_gui.m
@@ -82,10 +78,6 @@ if(APPLE)
 
     if(MACOS_GUI)
         add_executable(FontLoaderSub MACOSX_BUNDLE
-            ${COMMON_SOURCES}
-            FontLoaderSub/util_posix.c
-            FontLoaderSub/path_posix.c
-            FontLoaderSub/font_load_mac.c
             ${GUI_SOURCES}
         )
 
@@ -115,19 +107,16 @@ if(APPLE)
         )
 
         target_include_directories(FontLoaderSub PRIVATE
-            FontLoaderSub
             FontLoaderSub/mac_gui
         )
         target_link_libraries(FontLoaderSub PRIVATE
-            ${CORE_TEXT_LIB}
-            ${CORE_FOUNDATION_LIB}
             ${APP_KIT_LIB}
+            ${UNIFORM_TYPE_LIB}
         )
         target_compile_options(FontLoaderSub PRIVATE
             -Wall
             -Wextra
             -Wno-unused-parameter
-            -Wno-incompatible-pointer-types
         )
     endif()
 else()
@@ -145,6 +134,7 @@ endif()
 # --------------------------------------------------------------------------
 if(APPLE)
     target_compile_options(FontLoaderSubHelper PRIVATE
+        -fshort-wchar
         -Wall
         -Wextra
         -Wno-unused-parameter

@@ -1,6 +1,6 @@
 /* main_mac.c — macOS CLI entry point for FontLoaderSub
  *
- * Usage: fontloadersub --font-dir <font-dir> --subtitle <path> [--subtitle <path> ...]
+ * Usage: FontLoaderSubHelper --font-dir <font-dir> --subtitle <path> [--subtitle <path> ...]
  *
  *   <font-dir>       Directory containing font files (TTF/OTF/TTC)
  *   <subtitle-path>  ASS/SSA subtitle file or directory to scan

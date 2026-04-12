@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.15)
 project(FontLoaderSub C OBJC)
 
+set(FONTLOADERSUB_BUNDLE_ID "com.fontloadersub.app" CACHE STRING "macOS bundle identifier")
+set(FONTLOADERSUB_VERSION "1.0" CACHE STRING "macOS app version")
+set(FONTLOADERSUB_BUILD_NUMBER "1" CACHE STRING "macOS app build number")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -68,16 +72,16 @@ endif()
 # Targets
 # --------------------------------------------------------------------------
 if(APPLE)
-    add_executable(fontloadersub
+    add_executable(FontLoaderSubHelper
         ${COMMON_SOURCES}
         ${CLI_SOURCES}
     )
 
-    target_include_directories(fontloadersub PRIVATE FontLoaderSub)
-    target_link_libraries(fontloadersub PRIVATE ${CLI_LIBS})
+    target_include_directories(FontLoaderSubHelper PRIVATE FontLoaderSub)
+    target_link_libraries(FontLoaderSubHelper PRIVATE ${CLI_LIBS})
 
     if(MACOS_GUI)
-        add_executable(FontLoaderSubGUI MACOSX_BUNDLE
+        add_executable(FontLoaderSub MACOSX_BUNDLE
             ${COMMON_SOURCES}
             FontLoaderSub/util_posix.c
             FontLoaderSub/path_posix.c
@@ -85,31 +89,41 @@ if(APPLE)
             ${GUI_SOURCES}
         )
 
-        add_dependencies(FontLoaderSubGUI fontloadersub)
+        add_dependencies(FontLoaderSub FontLoaderSubHelper)
 
-        set_target_properties(FontLoaderSubGUI PROPERTIES
+        set_target_properties(FontLoaderSub PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST
                 "${CMAKE_CURRENT_SOURCE_DIR}/FontLoaderSub/mac_gui/Info.plist"
+            MACOSX_BUNDLE_GUI_IDENTIFIER
+                "${FONTLOADERSUB_BUNDLE_ID}"
+            MACOSX_BUNDLE_BUNDLE_NAME
+                "FontLoaderSub"
+            MACOSX_BUNDLE_BUNDLE_VERSION
+                "${FONTLOADERSUB_BUILD_NUMBER}"
+            MACOSX_BUNDLE_SHORT_VERSION_STRING
+                "${FONTLOADERSUB_VERSION}"
+            XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER
+                "${FONTLOADERSUB_BUNDLE_ID}"
         )
 
-        add_custom_command(TARGET FontLoaderSubGUI POST_BUILD
+        add_custom_command(TARGET FontLoaderSub POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory
-                "$<TARGET_FILE_DIR:FontLoaderSubGUI>/../Helpers"
+                "$<TARGET_FILE_DIR:FontLoaderSub>/../Helpers"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:fontloadersub>"
-                "$<TARGET_FILE_DIR:FontLoaderSubGUI>/../Helpers/fontloadersub"
+                "$<TARGET_FILE:FontLoaderSubHelper>"
+                "$<TARGET_FILE_DIR:FontLoaderSub>/../Helpers/FontLoaderSubHelper"
         )
 
-        target_include_directories(FontLoaderSubGUI PRIVATE
+        target_include_directories(FontLoaderSub PRIVATE
             FontLoaderSub
             FontLoaderSub/mac_gui
         )
-        target_link_libraries(FontLoaderSubGUI PRIVATE
+        target_link_libraries(FontLoaderSub PRIVATE
             ${CORE_TEXT_LIB}
             ${CORE_FOUNDATION_LIB}
             ${APP_KIT_LIB}
         )
-        target_compile_options(FontLoaderSubGUI PRIVATE
+        target_compile_options(FontLoaderSub PRIVATE
             -Wall
             -Wextra
             -Wno-unused-parameter
@@ -130,7 +144,7 @@ endif()
 # Compiler warnings
 # --------------------------------------------------------------------------
 if(APPLE)
-    target_compile_options(fontloadersub PRIVATE
+    target_compile_options(FontLoaderSubHelper PRIVATE
         -Wall
         -Wextra
         -Wno-unused-parameter

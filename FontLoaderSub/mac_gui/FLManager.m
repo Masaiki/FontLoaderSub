@@ -152,7 +152,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 }
 
 - (NSString *)helperExecutablePath {
-    return [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Contents/Helpers/fontloadersub"];
+    return [[[NSBundle mainBundle] bundlePath] stringByAppendingPathComponent:@"Contents/Helpers/FontLoaderSubHelper"];
 }
 
 - (BOOL)parseReadyLine:(NSString *)line

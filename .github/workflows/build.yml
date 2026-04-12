@@ -1,0 +1,46 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: microsoft/setup-msbuild@v2
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $tag = git describe --always --dirty="(X)"
+          $env:CMDLINE_DEFINE = "FONTLOADERSUB_GIT_VERSION=\""$tag\"""
+          msbuild FontLoaderSub.sln /p:Platform=x86 /p:Configuration=Minimize
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FontLoaderSub-Windows-x86
+          path: Minimize/Win32/FontLoaderSub.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CMake configure
+        run: >
+          cmake -S . -B build -G Xcode
+          -DMACOS_GUI=ON
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
+
+      - name: Build
+        run: cmake --build build --config Release --target FontLoaderSub
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FontLoaderSub-macOS
+          path: build/Release/FontLoaderSub.app

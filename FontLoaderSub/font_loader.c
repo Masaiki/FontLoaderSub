@@ -7,6 +7,7 @@
 #else
 #  include <CommonCrypto/CommonDigest.h>
 #  include <fcntl.h>
+#  include <signal.h>
 #  include <sys/stat.h>
 #  include <time.h>
 #  include <unistd.h>
@@ -30,7 +31,8 @@ static void *os_event_create(void) {
 #ifdef _WIN32
   return CreateEvent(NULL, TRUE, FALSE, NULL);
 #else
-  int *flag = (int *)calloc(1, sizeof(int));
+  volatile sig_atomic_t *flag =
+      (volatile sig_atomic_t *)calloc(1, sizeof(sig_atomic_t));
   return flag;
 #endif
 }
@@ -47,7 +49,7 @@ static int os_event_set(void *e) {
 #ifdef _WIN32
   return SetEvent(e) ? FL_OK : FL_OS_ERROR;
 #else
-  *(volatile int *)e = 1;
+  *(volatile sig_atomic_t *)e = 1;
   return FL_OK;
 #endif
 }
@@ -57,7 +59,7 @@ static int os_event_check(void *e) {
 #ifdef _WIN32
   return (WaitForSingleObject(e, 0) != WAIT_TIMEOUT) ? FL_OS_ERROR : FL_OK;
 #else
-  return (*(volatile int *)e) ? FL_OS_ERROR : FL_OK;
+  return (*(volatile sig_atomic_t *)e) ? FL_OS_ERROR : FL_OK;
 #endif
 }
 
@@ -269,6 +271,57 @@ fl_walk_font_callback(const wchar_t *path, const FL_FileInfo *info, void *arg) {
   return FL_OK;
 }
 
+typedef struct {
+  FL_LoaderCtx *loader;
+  uint32_t num_file;
+  int valid;
+} FL_CacheValidateCtx;
+
+static int fl_is_font_file(const wchar_t *path, const FL_FileInfo *info) {
+  const size_t len = ass_strlen(path);
+  if (!(info->is_regular_file && len > 4))
+    return 0;
+
+  const wchar_t *ext = path + len - 4;
+  return ass_strncasecmp(ext, L".ttc", 4) == 0 ||
+         ass_strncasecmp(ext, L".otf", 4) == 0 ||
+         ass_strncasecmp(ext, L".ttf", 4) == 0;
+}
+
+static int fl_validate_cache_font_callback(
+    const wchar_t *path,
+    const FL_FileInfo *info,
+    void *arg) {
+  FL_CacheValidateCtx *v = arg;
+  FL_LoaderCtx *c = v->loader;
+
+  if (!fl_is_font_file(path, info))
+    return FL_OK;
+
+  v->num_file++;
+  const wchar_t *tag = path + str_db_tell(&c->font_path) + 1;
+  if (!fs_has_file(c->font_set, tag)) {
+    v->valid = 0;
+    return FL_UNRECOGNIZED;
+  }
+
+  return FL_OK;
+}
+
+static int fl_cache_matches_font_dir(FL_LoaderCtx *c) {
+  FS_Stat stat = {0};
+  fs_stat(c->font_set, &stat);
+
+  FL_CacheValidateCtx v = {.loader = c, .valid = 1};
+  str_db_seek(&c->walk_path, 0);
+  if (!str_db_push_u16_le(&c->walk_path, str_db_get(&c->font_path, 0), 0))
+    return 0;
+
+  const int r =
+      FlWalkDirStr(&c->walk_path, fl_validate_cache_font_callback, &v);
+  return r == FL_OK && v.valid && v.num_file == stat.num_file;
+}
+
 static void
 fl_blacklist_parse(FL_LoaderCtx *c, const wchar_t *data, size_t cch) {
   const wchar_t *p = data;
@@ -369,6 +422,9 @@ int fl_scan_fonts(
     }
     if (r == FL_OK) {
       r = fs_cache_load(str_db_get(&c->walk_path, 0), c->alloc, &c->font_set);
+      if (r == FL_OK && !fl_cache_matches_font_dir(c)) {
+        r = FL_UNRECOGNIZED;
+      }
     }
   } else {
     // search font files

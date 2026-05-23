@@ -457,6 +457,27 @@ int fs_iter_next(FS_Iter *it) {
   return 0;
 }
 
+int fs_has_file(FS_Set *s, const wchar_t *tag) {
+  if (s == NULL || tag == NULL)
+    return 0;
+
+  int has_filename = 0;
+  const wchar_t *line;
+  size_t pos = 0;
+  while ((line = str_db_next(&s->db, &pos)) != NULL) {
+    if (line[0] == 0) {
+      has_filename = 0;
+    } else if (line[0] == L'\t') {
+      continue;
+    } else if (!has_filename) {
+      if (FlStrCmpIW(line, tag) == 0)
+        return 1;
+      has_filename = 1;
+    }
+  }
+  return 0;
+}
+
 int fs_cache_load(const wchar_t *path, allocator_t *alloc, FS_Set **out) {
   int ok = 0, r;
   FS_Set *s = NULL;

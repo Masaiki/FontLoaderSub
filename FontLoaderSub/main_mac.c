@@ -18,8 +18,11 @@
 #include "font_set.h"
 #include "util.h"
 
+#import <Foundation/Foundation.h>
+
 #include <errno.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,14 +46,22 @@ static void *mac_realloc(void *existing, size_t size, void *arg) {
   return realloc(existing, size);
 }
 
-static volatile int g_interrupted = 0;
+static volatile sig_atomic_t g_interrupted = 0;
 static FL_LoaderCtx *g_ctx = NULL;
 
 static void on_signal(int sig) {
   (void)sig;
   g_interrupted = 1;
-  if (g_ctx)
-    fl_cancel(g_ctx);
+  if (g_ctx && g_ctx->event_cancel)
+    *(volatile sig_atomic_t *)g_ctx->event_cancel = 1;
+}
+
+static int check_interrupted(FL_LoaderCtx *ctx) {
+  if (!g_interrupted)
+    return FL_OK;
+  if (ctx)
+    fl_cancel(ctx);
+  return FL_OS_ERROR;
 }
 
 static wchar_t *argv_to_wchar(const char *arg, allocator_t *alloc) {
@@ -90,12 +101,114 @@ static wchar_t *argv_to_wchar(const char *arg, allocator_t *alloc) {
   return buf;
 }
 
-static void print_wstr(const wchar_t *ws) {
+static char *wstr_to_utf8_alloc(const wchar_t *ws) {
   if (!ws)
+    return NULL;
+  size_t cap = 256;
+  for (;;) {
+    char *buf = (char *)malloc(cap);
+    if (!buf)
+      return NULL;
+    int n = fl_wchar_to_utf8(ws, buf, cap);
+    if ((size_t)n < cap - 1)
+      return buf;
+    free(buf);
+    if (cap > (SIZE_MAX / 2))
+      return NULL;
+    cap *= 2;
+  }
+}
+
+static NSString *nsstr_from_utf8(const char *s) {
+  if (!s)
+    return @"";
+  NSString *str = [NSString stringWithUTF8String:s];
+  return str ? str : @"";
+}
+
+static void json_emit(NSDictionary *event) {
+  @autoreleasepool {
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:event
+                                                   options:0
+                                                     error:&error];
+    if (!data)
+      return;
+    fwrite(data.bytes, 1, data.length, stdout);
+    fputc('\n', stdout);
+  }
+}
+
+static void json_event_log(const char *message) {
+  @autoreleasepool {
+    json_emit(@{
+        @"event": @"log",
+        @"message": nsstr_from_utf8(message),
+    });
+  }
+}
+
+static void json_event_logf(const char *fmt, ...) {
+  va_list ap;
+  va_list ap2;
+  int n;
+  char stack_buf[512];
+  char *buf = stack_buf;
+
+  va_start(ap, fmt);
+  va_copy(ap2, ap);
+  n = vsnprintf(stack_buf, sizeof stack_buf, fmt, ap);
+  va_end(ap);
+  if (n < 0) {
+    va_end(ap2);
     return;
-  char buf[1024];
-  fl_wchar_to_utf8(ws, buf, sizeof buf);
-  fputs(buf, stdout);
+  }
+  if ((size_t)n >= sizeof stack_buf) {
+    buf = (char *)malloc((size_t)n + 1);
+    if (!buf) {
+      va_end(ap2);
+      return;
+    }
+    vsnprintf(buf, (size_t)n + 1, fmt, ap2);
+  }
+  va_end(ap2);
+
+  json_event_log(buf);
+  if (buf != stack_buf)
+    free(buf);
+}
+
+static void json_event_font(const char *status, const wchar_t *face,
+                            const wchar_t *filename) {
+  char *face_utf8 = wstr_to_utf8_alloc(face);
+  char *filename_utf8 = wstr_to_utf8_alloc(filename);
+
+  @autoreleasepool {
+    NSMutableDictionary *event = [NSMutableDictionary dictionaryWithObjectsAndKeys:
+        @"font", @"event",
+        nsstr_from_utf8(status), @"status",
+        nsstr_from_utf8(face_utf8), @"face",
+        nil];
+    if (filename_utf8) {
+      [event setObject:nsstr_from_utf8(filename_utf8) forKey:@"path"];
+    }
+    json_emit(event);
+  }
+
+  free(face_utf8);
+  free(filename_utf8);
+}
+
+static void json_event_ready(uint32_t loaded, uint32_t failed,
+                             uint32_t missing) {
+  @autoreleasepool {
+    json_emit(@{
+        @"event": @"ready",
+        @"loaded": [NSNumber numberWithUnsignedInt:loaded],
+        @"failed": [NSNumber numberWithUnsignedInt:failed],
+        @"missing": [NSNumber numberWithUnsignedInt:missing],
+    });
+  }
 }
 
 static void wait_for_shutdown(void) {
@@ -147,21 +260,27 @@ static int run_loader(FL_LoaderCtx *ctx, allocator_t *alloc,
     return FL_OUT_OF_MEMORY;
 
   for (i = 0; i != subtitle_count; i++) {
-    printf("Scanning subtitles: %s\n", subtitle_paths[i]);
+    json_event_logf("Scanning subtitles: %s", subtitle_paths[i]);
+    if ((r = check_interrupted(ctx)) != FL_OK)
+      goto cleanup;
     r = add_subtitle(ctx, alloc, subtitle_paths[i]);
     if (r != FL_OK)
       goto cleanup;
   }
 
-  printf("  Found %u subtitle(s), %u font reference(s)\n",
-         ctx->num_sub, ctx->num_sub_font);
+  json_event_logf("  Found %u subtitle(s), %u font reference(s)",
+                  ctx->num_sub, ctx->num_sub_font);
 
   if (ctx->num_sub_font == 0) {
-    printf("No fonts needed — nothing to do.\n");
+    json_event_log("No fonts needed - nothing to do.");
+    json_event_ready(0, 0, 0);
+    fflush(stdout);
     goto cleanup;
   }
 
-  printf("Loading font index from: %s\n", font_path);
+  json_event_logf("Loading font index from: %s", font_path);
+  if ((r = check_interrupted(ctx)) != FL_OK)
+    goto cleanup;
   r = fl_scan_fonts(ctx, font_w, kCacheFile, kBlackFile);
 
   {
@@ -170,19 +289,23 @@ static int run_loader(FL_LoaderCtx *ctx, allocator_t *alloc,
       fs_stat(ctx->font_set, &stat);
 
     if (stat.num_face == 0) {
-      printf("  Cache miss — scanning font files...\n");
+      json_event_log("  Cache miss - scanning font files...");
+      if ((r = check_interrupted(ctx)) != FL_OK)
+        goto cleanup;
       r = fl_scan_fonts(ctx, font_w, NULL, kBlackFile);
       if (r == FL_OK) {
+        char msg[160];
         fs_stat(ctx->font_set, &stat);
-        printf("  Indexed %u file(s) / %u face(s)",
-               stat.num_file, stat.num_face);
+        snprintf(msg, sizeof msg, "  Indexed %u file(s) / %u face(s)",
+                 stat.num_file, stat.num_face);
         if (fl_save_cache(ctx, kCacheFile) == FL_OK) {
-          printf(" — cache saved");
+          size_t len = strlen(msg);
+          snprintf(msg + len, sizeof msg - len, " - cache saved");
         }
-        printf("\n");
+        json_event_log(msg);
       }
     } else {
-      printf("  Loaded %u face(s) from cache\n", stat.num_face);
+      json_event_logf("  Loaded %u face(s) from cache", stat.num_face);
     }
   }
 
@@ -191,60 +314,62 @@ static int run_loader(FL_LoaderCtx *ctx, allocator_t *alloc,
     goto cleanup;
   }
 
-  printf("Loading fonts...\n");
+  json_event_log("Loading fonts...");
+  if ((r = check_interrupted(ctx)) != FL_OK)
+    goto cleanup;
   r = fl_load_fonts(ctx);
   if (r != FL_OK) {
     fprintf(stderr, "Error loading fonts (%d)\n", r);
     goto cleanup;
   }
 
-  printf("\nResults:\n");
+  json_event_log("Results:");
   {
     FL_FontMatch *data = ctx->loaded_font.data;
     for (i = 0; i != ctx->loaded_font.n; i++) {
       FL_FontMatch *m = &data[i];
-      const char *tag;
+      const char *status;
       if (m->flag & FL_LOAD_DUP)
-        tag = "[dup] ";
+        status = "dup";
       else if (m->flag & FL_OS_LOADED)
-        tag = "[sys] ";
+        status = "system";
       else if (m->flag & FL_LOAD_OK)
-        tag = "[ok]  ";
+        status = "ok";
       else if (m->flag & FL_LOAD_ERR)
-        tag = "[ X]  ";
+        status = "failed";
       else if (m->flag & FL_LOAD_MISS)
-        tag = "[---] ";
+        status = "missing";
       else
-        tag = "[?]   ";
+        status = "unknown";
 
-      fputs(tag, stdout);
-      print_wstr(m->face);
-      if (m->filename && !(m->flag & (FL_OS_LOADED | FL_LOAD_DUP))) {
-        fputs(" <- ", stdout);
-        print_wstr(m->filename);
-      }
-      putchar('\n');
+      json_event_font(status, m->face,
+                      (m->filename && !(m->flag & (FL_OS_LOADED | FL_LOAD_DUP)))
+                          ? m->filename
+                          : NULL);
     }
   }
 
-  printf("\nLoaded: %u  Failed: %u  Missing: %u\n",
-         ctx->num_font_loaded, ctx->num_font_failed, ctx->num_font_unmatched);
-  printf("FLS_READY loaded=%u failed=%u missing=%u\n",
-         ctx->num_font_loaded, ctx->num_font_failed, ctx->num_font_unmatched);
+  json_event_logf("Loaded: %u  Failed: %u  Missing: %u",
+                  ctx->num_font_loaded, ctx->num_font_failed,
+                  ctx->num_font_unmatched);
+  json_event_ready(ctx->num_font_loaded, ctx->num_font_failed,
+                   ctx->num_font_unmatched);
   fflush(stdout);
 
   if (ctx->num_font_loaded == 0) {
-    printf("No fonts were loaded (all already in system or none matched).\n");
+    json_event_log("No fonts were loaded (all already in system or none matched).");
     goto cleanup;
   }
 
   wait_for_shutdown();
 
-  printf("Unloading fonts...\n");
+  json_event_log("Unloading fonts...");
   fl_unload_fonts(ctx);
-  printf("Done.\n");
+  json_event_log("Done.");
 
 cleanup:
+  if (ctx->loaded_font.n > 0)
+    fl_unload_fonts(ctx);
   alloc->alloc(font_w, 0, alloc->arg);
   return r;
 }
@@ -332,4 +457,3 @@ int main(int argc, char *argv[]) {
   free((void *)subtitle_paths);
   return (r == FL_OK || r == FL_OS_ERROR) ? 0 : 1;
 }
-

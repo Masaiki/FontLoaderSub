@@ -34,7 +34,9 @@ if(APPLE)
 
     find_library(CORE_TEXT_LIB CoreText REQUIRED)
     find_library(CORE_FOUNDATION_LIB CoreFoundation REQUIRED)
-    set(CLI_LIBS ${CORE_TEXT_LIB} ${CORE_FOUNDATION_LIB})
+    find_library(FOUNDATION_LIB Foundation REQUIRED)
+    set(CLI_LIBS ${CORE_TEXT_LIB} ${CORE_FOUNDATION_LIB} ${FOUNDATION_LIB})
+    set_source_files_properties(FontLoaderSub/main_mac.c PROPERTIES LANGUAGE OBJC)
 
     option(MACOS_GUI "Build macOS menu-bar .app bundle" OFF)
     if(MACOS_GUI)
@@ -46,6 +48,13 @@ if(APPLE)
             FontLoaderSub/mac_gui/FLManager.m
             FontLoaderSub/mac_gui/AppDelegate.m
             FontLoaderSub/mac_gui/main_mac_gui.m
+        )
+        set(GUI_RESOURCES
+            FontLoaderSub/mac_gui/Resources/AppIcon.icns
+            FontLoaderSub/mac_gui/Resources/MenuBarIconTemplate.png
+        )
+        set_source_files_properties(${GUI_RESOURCES} PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources
         )
     endif()
 
@@ -86,6 +95,7 @@ if(APPLE)
     if(MACOS_GUI)
         add_executable(FontLoaderSub MACOSX_BUNDLE
             ${GUI_SOURCES}
+            ${GUI_RESOURCES}
         )
 
         add_dependencies(FontLoaderSub FontLoaderSubHelper)
@@ -93,6 +103,8 @@ if(APPLE)
         set_target_properties(FontLoaderSub PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST
                 "${CMAKE_CURRENT_SOURCE_DIR}/FontLoaderSub/mac_gui/Info.plist"
+            MACOSX_BUNDLE_ICON_FILE
+                "AppIcon.icns"
             MACOSX_BUNDLE_GUI_IDENTIFIER
                 "${FONTLOADERSUB_BUNDLE_ID}"
             MACOSX_BUNDLE_BUNDLE_NAME

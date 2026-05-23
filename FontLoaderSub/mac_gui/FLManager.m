@@ -3,9 +3,11 @@
 #import <dispatch/dispatch.h>
 
 #include <errno.h>
+#include <signal.h>
 
 static NSString *const FLManagerErrorDomain = @"com.fontloadersub.manager";
 static NSString *const FLReadyPrefix = @"FLS_READY ";
+static NSTimeInterval const FLHelperGracefulShutdownTimeout = 5.0;
 
 @interface FLManager () {
     dispatch_queue_t _queue;
@@ -54,40 +56,125 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 }
 
 - (FLManagerState)state {
-    return _state;
+    @synchronized (self) {
+        return _state;
+    }
 }
 
 - (NSUInteger)numLoaded {
-    return _numLoaded;
+    @synchronized (self) {
+        return _numLoaded;
+    }
 }
 
 - (NSUInteger)numFailed {
-    return _numFailed;
+    @synchronized (self) {
+        return _numFailed;
+    }
 }
 
 - (NSUInteger)numUnmatched {
-    return _numUnmatched;
+    @synchronized (self) {
+        return _numUnmatched;
+    }
 }
 
 - (NSArray<NSString *> *)detailLines {
-    return [[_detailLines copy] autorelease];
+    @synchronized (self) {
+        return [[_detailLines copy] autorelease];
+    }
 }
 
 - (NSArray<NSString *> *)loadedFontRelativePaths {
-    return [[_loadedFontRelativePaths copy] autorelease];
+    @synchronized (self) {
+        return [[_loadedFontRelativePaths copy] autorelease];
+    }
 }
 
 - (NSString *)logText {
-    return [[_logText copy] autorelease];
+    @synchronized (self) {
+        return [[_logText copy] autorelease];
+    }
 }
 
 - (void)clearLog {
-    [_logText setString:@""];
+    @synchronized (self) {
+        [_logText setString:@""];
+    }
 }
 
 - (void)appendLog:(NSString *)line {
-    [_logText appendString:line];
-    [_logText appendString:@"\n"];
+    @synchronized (self) {
+        [_logText appendString:line ?: @""];
+        [_logText appendString:@"\n"];
+    }
+}
+
+- (NSUInteger)advanceGeneration {
+    @synchronized (self) {
+        _generation++;
+        return _generation;
+    }
+}
+
+- (BOOL)isCurrentGeneration:(NSUInteger)generation {
+    @synchronized (self) {
+        return generation == _generation;
+    }
+}
+
+- (void)setVisibleState:(FLManagerState)state
+              numLoaded:(NSUInteger)numLoaded
+              numFailed:(NSUInteger)numFailed
+           numUnmatched:(NSUInteger)numUnmatched {
+    @synchronized (self) {
+        _state = state;
+        _numLoaded = numLoaded;
+        _numFailed = numFailed;
+        _numUnmatched = numUnmatched;
+    }
+}
+
+- (void)resetPublicResults {
+    @synchronized (self) {
+        _numLoaded = 0;
+        _numFailed = 0;
+        _numUnmatched = 0;
+        [_detailLines release];
+        _detailLines = nil;
+        [_loadedFontRelativePaths release];
+        _loadedFontRelativePaths = nil;
+    }
+}
+
+- (void)beginPublicLoadState {
+    @synchronized (self) {
+        _state = FLManagerStateLoading;
+        _numLoaded = 0;
+        _numFailed = 0;
+        _numUnmatched = 0;
+        [_detailLines release];
+        _detailLines = [[NSMutableArray alloc] init];
+        [_loadedFontRelativePaths release];
+        _loadedFontRelativePaths = [[NSMutableArray alloc] init];
+    }
+}
+
+- (void)addDetailLine:(NSString *)line loadedFontRelativePath:(NSString *)relativePath {
+    @synchronized (self) {
+        if (_detailLines == nil) {
+            _detailLines = [[NSMutableArray alloc] init];
+        }
+        [_detailLines addObject:line];
+        if (relativePath.length > 0) {
+            if (_loadedFontRelativePaths == nil) {
+                _loadedFontRelativePaths = [[NSMutableArray alloc] init];
+            }
+            if (![_loadedFontRelativePaths containsObject:relativePath]) {
+                [_loadedFontRelativePaths addObject:relativePath];
+            }
+        }
+    }
 }
 
 - (NSError *)errorWithCode:(NSInteger)code description:(NSString *)description {
@@ -100,11 +187,17 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     if (handler == nil) {
         return;
     }
+    void (^handlerCopy)(NSString *) = [handler copy];
+    NSString *messageCopy = [message copy];
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (generation != self->_generation) {
+        if (![self isCurrentGeneration:generation]) {
+            [handlerCopy release];
+            [messageCopy release];
             return;
         }
-        handler(message);
+        handlerCopy(messageCopy);
+        [handlerCopy release];
+        [messageCopy release];
     });
 }
 
@@ -119,17 +212,23 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
         [self appendLog:[NSString stringWithFormat:@"Error: %@", error.localizedDescription ?: @"Failed"]];
     }
     [self appendLog:@""];
+    void (^completionCopy)(FLManagerState, NSError *) = [completion copy];
+    NSError *errorCopy = [error retain];
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (generation != self->_generation) {
+        if (![self isCurrentGeneration:generation]) {
+            [completionCopy release];
+            [errorCopy release];
             return;
         }
-        self->_state = state;
-        self->_numLoaded = numLoaded;
-        self->_numFailed = numFailed;
-        self->_numUnmatched = numUnmatched;
-        if (completion != nil) {
-            completion(state, error);
+        [self setVisibleState:state
+                    numLoaded:numLoaded
+                    numFailed:numFailed
+                 numUnmatched:numUnmatched];
+        if (completionCopy != nil) {
+            completionCopy(state, errorCopy);
         }
+        [completionCopy release];
+        [errorCopy release];
     });
 }
 
@@ -167,7 +266,20 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
         [self closeFileHandle:_stdinPipe.fileHandleForWriting];
     }
     if (_task != nil && _task.isRunning) {
-        [_task terminate];
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:FLHelperGracefulShutdownTimeout];
+        while (_task.isRunning && [deadline timeIntervalSinceNow] > 0) {
+            [NSThread sleepForTimeInterval:0.05];
+        }
+    }
+    if (_task != nil && _task.isRunning) {
+        kill((pid_t)_task.processIdentifier, SIGTERM);
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:FLHelperGracefulShutdownTimeout];
+        while (_task.isRunning && [deadline timeIntervalSinceNow] > 0) {
+            [NSThread sleepForTimeInterval:0.05];
+        }
+    }
+    if (_task != nil && _task.isRunning) {
+        kill((pid_t)_task.processIdentifier, SIGKILL);
         [_task waitUntilExit];
     }
     [self clearTaskLocked];
@@ -213,6 +325,132 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     return YES;
 }
 
+- (NSUInteger)unsignedIntegerFromObject:(id)object {
+    if ([object respondsToSelector:@selector(unsignedIntegerValue)]) {
+        return [object unsignedIntegerValue];
+    }
+    return 0;
+}
+
+- (NSString *)detailLineForFontEvent:(NSDictionary *)event {
+    NSString *status = event[@"status"];
+    NSString *face = event[@"face"];
+    NSString *path = event[@"path"];
+    NSString *tag = @"[?]  ";
+
+    if (![status isKindOfClass:[NSString class]]) {
+        status = @"unknown";
+    }
+    if (![face isKindOfClass:[NSString class]]) {
+        face = @"";
+    }
+    if (![path isKindOfClass:[NSString class]]) {
+        path = nil;
+    }
+
+    if ([status isEqualToString:@"ok"]) {
+        tag = @"[ok] ";
+    } else if ([status isEqualToString:@"failed"]) {
+        tag = @"[ X] ";
+    } else if ([status isEqualToString:@"missing"]) {
+        tag = @"[---] ";
+    } else if ([status isEqualToString:@"system"]) {
+        tag = @"[sys] ";
+    } else if ([status isEqualToString:@"dup"]) {
+        tag = @"[dup] ";
+    }
+
+    if (path.length > 0) {
+        return [NSString stringWithFormat:@"%@%@ <- %@", tag, face, path];
+    }
+    return [NSString stringWithFormat:@"%@%@", tag, face];
+}
+
+- (BOOL)processJSONLine:(NSString *)line
+             generation:(NSUInteger)generation
+               progress:(void(^)(NSString *message))progress
+              numLoaded:(NSUInteger *)numLoaded
+              numFailed:(NSUInteger *)numFailed
+           numUnmatched:(NSUInteger *)numUnmatched
+            onReadyLine:(void(^)(void))onReadyLine {
+    if (![line hasPrefix:@"{"]) {
+        return NO;
+    }
+
+    NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+    if (data == nil) {
+        return NO;
+    }
+
+    NSError *jsonError = nil;
+    id object = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonError];
+    if (![object isKindOfClass:[NSDictionary class]]) {
+        return NO;
+    }
+
+    NSDictionary *event = (NSDictionary *)object;
+    NSString *eventName = event[@"event"];
+    if (![eventName isKindOfClass:[NSString class]]) {
+        return NO;
+    }
+
+    if ([eventName isEqualToString:@"ready"]) {
+        if (numLoaded != NULL) {
+            *numLoaded = [self unsignedIntegerFromObject:event[@"loaded"]];
+        }
+        if (numFailed != NULL) {
+            *numFailed = [self unsignedIntegerFromObject:event[@"failed"]];
+        }
+        if (numUnmatched != NULL) {
+            *numUnmatched = [self unsignedIntegerFromObject:event[@"missing"]];
+        }
+        _helperReady = YES;
+        if (onReadyLine != nil) {
+            onReadyLine();
+        }
+        return YES;
+    }
+
+    if ([eventName isEqualToString:@"log"]) {
+        NSString *message = event[@"message"];
+        if (![message isKindOfClass:[NSString class]]) {
+            message = @"";
+        }
+        [self appendLog:message];
+        [self publishProgress:message generation:generation handler:progress];
+        return YES;
+    }
+
+    if ([eventName isEqualToString:@"font"]) {
+        NSString *status = event[@"status"];
+        NSString *path = event[@"path"];
+        NSString *detailLine = [self detailLineForFontEvent:event];
+        if (![status isKindOfClass:[NSString class]]) {
+            status = @"unknown";
+        }
+        if (![path isKindOfClass:[NSString class]]) {
+            path = nil;
+        }
+        NSString *loadedPath = [status isEqualToString:@"ok"] ? path : nil;
+
+        [self appendLog:detailLine];
+        [self addDetailLine:detailLine loadedFontRelativePath:loadedPath];
+
+        if (numLoaded != NULL && [status isEqualToString:@"ok"]) {
+            (*numLoaded)++;
+        } else if (numFailed != NULL && [status isEqualToString:@"failed"]) {
+            (*numFailed)++;
+        } else if (numUnmatched != NULL && [status isEqualToString:@"missing"]) {
+            (*numUnmatched)++;
+        }
+
+        [self publishProgress:detailLine generation:generation handler:progress];
+        return YES;
+    }
+
+    return NO;
+}
+
 - (void)processOutputBuffer:(NSMutableData *)buffer
                  generation:(NSUInteger)generation
                    isStderr:(BOOL)isStderr
@@ -248,6 +486,17 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
             continue;
         }
 
+        if (!isStderr &&
+            [self processJSONLine:line
+                        generation:generation
+                          progress:progress
+                         numLoaded:numLoaded
+                         numFailed:numFailed
+                      numUnmatched:numUnmatched
+                       onReadyLine:onReadyLine]) {
+            continue;
+        }
+
         if ([self parseReadyLine:line numLoaded:numLoaded numFailed:numFailed numUnmatched:numUnmatched]) {
             _helperReady = YES;
             if (onReadyLine != nil) {
@@ -263,22 +512,20 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
         }
 
         if ([line hasPrefix:@"["]) {
-            [_detailLines addObject:line];
+            NSString *loadedPath = nil;
             if (numLoaded != NULL && [line hasPrefix:@"[ok]"]) {
                 (*numLoaded)++;
                 NSRange arrowRange = [line rangeOfString:@" <- "];
                 if (arrowRange.location != NSNotFound) {
                     NSString *relativePath = [line substringFromIndex:NSMaxRange(arrowRange)];
-                    if (relativePath.length > 0 &&
-                        ![_loadedFontRelativePaths containsObject:relativePath]) {
-                        [_loadedFontRelativePaths addObject:relativePath];
-                    }
+                    loadedPath = relativePath;
                 }
             } else if (numFailed != NULL && [line hasPrefix:@"[ X]"]) {
                 (*numFailed)++;
             } else if (numUnmatched != NULL && [line hasPrefix:@"[---]"]) {
                 (*numUnmatched)++;
             }
+            [self addDetailLine:line loadedFontRelativePath:loadedPath];
         }
 
         [self publishProgress:line generation:generation handler:progress];
@@ -317,15 +564,8 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     void (^progressCopy)(NSString *) = [progress copy];
     void (^completionCopy)(FLManagerState, NSError *) = [completion copy];
 
-    NSUInteger generation = ++_generation;
-    _state = FLManagerStateLoading;
-    _numLoaded = 0;
-    _numFailed = 0;
-    _numUnmatched = 0;
-    [_detailLines release];
-    _detailLines = [[NSMutableArray alloc] init];
-    [_loadedFontRelativePaths release];
-    _loadedFontRelativePaths = [[NSMutableArray alloc] init];
+    NSUInteger generation = [self advanceGeneration];
+    [self beginPublicLoadState];
 
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
     fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss";
@@ -384,7 +624,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
         _stdoutPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fileHandle) {
             NSData *data = [fileHandle availableData];
             dispatch_async(self->_queue, ^{
-                if (generation != self->_generation || self->_stdoutBuffer == nil) {
+                if (![self isCurrentGeneration:generation] || self->_stdoutBuffer == nil) {
                     return;
                 }
                 [self appendData:data
@@ -413,7 +653,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
         _stderrPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *fileHandle) {
             NSData *data = [fileHandle availableData];
             dispatch_async(self->_queue, ^{
-                if (generation != self->_generation || self->_stderrBuffer == nil) {
+                if (![self isCurrentGeneration:generation] || self->_stderrBuffer == nil) {
                     return;
                 }
                 [self appendData:data
@@ -432,7 +672,11 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
             dispatch_async(self->_queue, ^{
                 NSData *remainingOut;
                 NSData *remainingErr;
-                if (generation != self->_generation) {
+                if (![self isCurrentGeneration:generation]) {
+                    [subtitleCopy release];
+                    [fontDirCopy release];
+                    [progressCopy release];
+                    [completionCopy release];
                     return;
                 }
                 self->_stdoutPipe.fileHandleForReading.readabilityHandler = nil;
@@ -475,7 +719,11 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
                    they execute first before we decide on failure. */
                 dispatch_async(self->_queue, ^{
                     NSString *stderrText;
-                    if (generation != self->_generation) {
+                    if (![self isCurrentGeneration:generation]) {
+                        [subtitleCopy release];
+                        [fontDirCopy release];
+                        [progressCopy release];
+                        [completionCopy release];
                         return;
                     }
 
@@ -548,11 +796,11 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
             [self clearTaskLocked];
             [self finishWithState:FLManagerStateFailed
                        generation:generation
-                        numLoaded:0
-                        numFailed:0
-                     numUnmatched:0
-                            error:error
-                       completion:completionCopy];
+                       numLoaded:0
+                       numFailed:0
+                    numUnmatched:0
+                           error:error
+                      completion:completionCopy];
             [subtitleCopy release];
             [fontDirCopy release];
             [progressCopy release];
@@ -562,31 +810,25 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 }
 
 - (void)resetStateLocked {
-    _numLoaded = 0;
-    _numFailed = 0;
-    _numUnmatched = 0;
-    [_detailLines release];
-    _detailLines = nil;
-    [_loadedFontRelativePaths release];
-    _loadedFontRelativePaths = nil;
+    [self resetPublicResults];
 }
 
 - (void)unloadFonts {
-    _generation++;
+    [self advanceGeneration];
     dispatch_sync(_queue, ^{
         [self terminateTaskLocked];
         [self resetStateLocked];
     });
-    _state = FLManagerStateIdle;
+    [self setVisibleState:FLManagerStateIdle numLoaded:0 numFailed:0 numUnmatched:0];
 }
 
 - (void)cancel {
-    _generation++;
+    [self advanceGeneration];
     dispatch_sync(_queue, ^{
         [self terminateTaskLocked];
         [self resetStateLocked];
     });
-    _state = FLManagerStateIdle;
+    [self setVisibleState:FLManagerStateIdle numLoaded:0 numFailed:0 numUnmatched:0];
 }
 
 @end

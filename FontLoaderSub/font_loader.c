@@ -7,6 +7,7 @@
 #else
 #  include <CommonCrypto/CommonDigest.h>
 #  include <fcntl.h>
+#  include <signal.h>
 #  include <sys/stat.h>
 #  include <time.h>
 #  include <unistd.h>
@@ -30,7 +31,8 @@ static void *os_event_create(void) {
 #ifdef _WIN32
   return CreateEvent(NULL, TRUE, FALSE, NULL);
 #else
-  int *flag = (int *)calloc(1, sizeof(int));
+  volatile sig_atomic_t *flag =
+      (volatile sig_atomic_t *)calloc(1, sizeof(sig_atomic_t));
   return flag;
 #endif
 }
@@ -47,7 +49,7 @@ static int os_event_set(void *e) {
 #ifdef _WIN32
   return SetEvent(e) ? FL_OK : FL_OS_ERROR;
 #else
-  *(volatile int *)e = 1;
+  *(volatile sig_atomic_t *)e = 1;
   return FL_OK;
 #endif
 }
@@ -57,7 +59,7 @@ static int os_event_check(void *e) {
 #ifdef _WIN32
   return (WaitForSingleObject(e, 0) != WAIT_TIMEOUT) ? FL_OS_ERROR : FL_OK;
 #else
-  return (*(volatile int *)e) ? FL_OS_ERROR : FL_OK;
+  return (*(volatile sig_atomic_t *)e) ? FL_OS_ERROR : FL_OK;
 #endif
 }
 

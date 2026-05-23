@@ -34,7 +34,9 @@ if(APPLE)
 
     find_library(CORE_TEXT_LIB CoreText REQUIRED)
     find_library(CORE_FOUNDATION_LIB CoreFoundation REQUIRED)
-    set(CLI_LIBS ${CORE_TEXT_LIB} ${CORE_FOUNDATION_LIB})
+    find_library(FOUNDATION_LIB Foundation REQUIRED)
+    set(CLI_LIBS ${CORE_TEXT_LIB} ${CORE_FOUNDATION_LIB} ${FOUNDATION_LIB})
+    set_source_files_properties(FontLoaderSub/main_mac.c PROPERTIES LANGUAGE OBJC)
 
     option(MACOS_GUI "Build macOS menu-bar .app bundle" OFF)
     if(MACOS_GUI)

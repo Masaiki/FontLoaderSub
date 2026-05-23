@@ -260,8 +260,8 @@ static void fs_format_tag_to_str(FS_Format fmt, wchar_t s[4]) {
 
 #ifdef _WIN32
 static void fs_debug_write_line(HANDLE f, const wchar_t *line) {
-  SIZE_T nb = lstrlen(line) * sizeof line[0];
-  SIZE_T out = 0;
+  DWORD nb = (DWORD)(lstrlen(line) * sizeof line[0]);
+  DWORD out = 0;
   WriteFile(f, line, nb, &out, NULL);
 }
 

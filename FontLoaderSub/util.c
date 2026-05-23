@@ -1,10 +1,16 @@
 #include "util.h"
 #include <Windows.h>
 #include <Shlwapi.h>
-#include <intrin.h>
 
+#if defined(_MSC_VER) && (defined(_M_IX86) || defined(_M_X64))
+#include <intrin.h>
 #pragma intrinsic(__movsb)
 #pragma intrinsic(__stosb)
+#define FL_HAS_MSVC_MEM_INTRINSICS 1
+#else
+#include <string.h>
+#define FL_HAS_MSVC_MEM_INTRINSICS 0
+#endif
 
 int FlMemMap(const wchar_t *path, memmap_t *mmap) {
   mmap->map = NULL;
@@ -299,11 +305,19 @@ const TCHAR *ResLoadString(HMODULE hInstance, UINT idText) {
 }
 
 void *zmemset(void *dest, int ch, size_t count) {
+#if FL_HAS_MSVC_MEM_INTRINSICS
   __stosb((unsigned char *)dest, (unsigned char)ch, count);
+#else
+  memset(dest, ch, count);
+#endif
   return dest;
 }
 
 void *zmemcpy(void *dest, const void *src, size_t count) {
+#if FL_HAS_MSVC_MEM_INTRINSICS
   __movsb((unsigned char *)dest, (const unsigned char *)src, count);
+#else
+  memcpy(dest, src, count);
+#endif
   return dest;
 }

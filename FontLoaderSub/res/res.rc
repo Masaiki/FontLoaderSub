@@ -10,3 +10,7 @@
 // #include "resource.h"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+#include "res_en-us.rc"
+#include "res_zh-cn.rc"
+#include "res_zh-tw.rc"

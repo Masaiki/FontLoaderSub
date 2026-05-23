@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(FontLoaderSub C OBJC)
+project(FontLoaderSub C)
 
 set(FONTLOADERSUB_BUNDLE_ID "com.fontloadersub.app" CACHE STRING "macOS bundle identifier")
 set(FONTLOADERSUB_VERSION "1.0" CACHE STRING "macOS app version")
@@ -38,6 +38,8 @@ if(APPLE)
 
     option(MACOS_GUI "Build macOS menu-bar .app bundle" OFF)
     if(MACOS_GUI)
+        # Objective-C is only needed on macOS (for the GUI target)
+        enable_language(OBJC)
         find_library(APP_KIT_LIB AppKit REQUIRED)
         find_library(UNIFORM_TYPE_LIB UniformTypeIdentifiers REQUIRED)
         set(GUI_SOURCES
@@ -55,10 +57,15 @@ elseif(WIN32)
         FontLoaderSub/shortcut.c
         FontLoaderSub/main.c
     )
-    set(PLATFORM_LIBS bcrypt shlwapi)
+    set(PLATFORM_LIBS bcrypt shlwapi comctl32)
 
     # Resource file (dialogs, icons, strings)
     set(PLATFORM_SOURCES ${PLATFORM_SOURCES} FontLoaderSub/res/res.rc)
+
+    # MinGW cross-compilation: extra libs and subsystem flag
+    if(MINGW)
+        list(APPEND PLATFORM_LIBS ole32 uuid shell32 dwrite)
+    endif()
 
 else()
     message(FATAL_ERROR "Unsupported platform. Only macOS and Windows are supported.")
@@ -120,13 +127,35 @@ if(APPLE)
         )
     endif()
 else()
-    add_executable(fontloadersub
+    add_executable(fontloadersub WIN32
         ${COMMON_SOURCES}
         ${PLATFORM_SOURCES}
     )
 
     target_include_directories(fontloadersub PRIVATE FontLoaderSub)
+    target_compile_definitions(fontloadersub PRIVATE UNICODE _UNICODE)
     target_link_libraries(fontloadersub PRIVATE ${PLATFORM_LIBS})
+
+    if(MSVC)
+        target_compile_options(fontloadersub PRIVATE /Oi)
+        target_link_options(fontloadersub PRIVATE "/MANIFEST:NO")
+    endif()
+
+    if(MINGW)
+        string(APPEND CMAKE_RC_FLAGS " --codepage=65001")
+        target_link_options(fontloadersub PRIVATE
+            -municode
+        )
+        target_compile_options(fontloadersub PRIVATE
+            -Wall -Wextra -Wno-unused-parameter
+        )
+        target_compile_definitions(fontloadersub PRIVATE
+            NTDDI_VERSION=0x0A000000
+            _WIN32_WINNT=0x0A00
+            WINVER=0x0A00
+            COBJMACROS
+        )
+    endif()
 endif()
 
 # --------------------------------------------------------------------------

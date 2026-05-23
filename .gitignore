@@ -19,6 +19,7 @@
 [Xx]64/
 [Xx]86/
 [Bb]uild/
+build-*/
 bld/
 [Bb]in/
 [Oo]bj/
@@ -178,6 +179,8 @@ BundleArtifacts/
 !*.[Cc]ache/
 
 # Others
+.DS_Store
+*.dmg
 ClientBin/
 [Ss]tyle[Cc]op.*
 ~$*

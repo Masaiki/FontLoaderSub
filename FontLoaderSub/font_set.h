@@ -49,6 +49,8 @@ int fs_iter_new(FS_Set *s, const wchar_t *face, FS_Iter *it);
 
 int fs_iter_next(FS_Iter *it);
 
+int fs_has_file(FS_Set *s, const wchar_t *tag);
+
 int fs_cache_load(const wchar_t *path, allocator_t *alloc, FS_Set **out);
 
 int fs_cache_dump(FS_Set *s, const wchar_t *path);

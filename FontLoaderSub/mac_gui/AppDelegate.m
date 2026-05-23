@@ -71,13 +71,20 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
 - (void)buildMenu {
     _statusItem = [[[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength] retain];
     if ([_statusItem respondsToSelector:@selector(button)] && _statusItem.button != nil) {
-        NSImage *image;
-        if (@available(macOS 11.0, *)) {
-            image = [NSImage imageWithSystemSymbolName:@"textformat" accessibilityDescription:@"FontLoaderSub"];
-        } else {
+        NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"MenuBarIconTemplate" ofType:@"png"];
+        NSImage *image = iconPath.length > 0
+            ? [[[NSImage alloc] initWithContentsOfFile:iconPath] autorelease]
+            : nil;
+        if (image == nil) {
+            if (@available(macOS 11.0, *)) {
+                image = [NSImage imageWithSystemSymbolName:@"textformat" accessibilityDescription:@"FontLoaderSub"];
+            }
+        }
+        if (image == nil) {
             image = [NSImage imageNamed:NSImageNameActionTemplate];
         }
         image.template = YES;
+        image.size = NSMakeSize(18, 18);
         _statusItem.button.image = image;
         _statusItem.button.title = @"";
     }

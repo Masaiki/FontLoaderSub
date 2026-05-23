@@ -47,6 +47,13 @@ if(APPLE)
             FontLoaderSub/mac_gui/AppDelegate.m
             FontLoaderSub/mac_gui/main_mac_gui.m
         )
+        set(GUI_RESOURCES
+            FontLoaderSub/mac_gui/Resources/AppIcon.icns
+            FontLoaderSub/mac_gui/Resources/MenuBarIconTemplate.png
+        )
+        set_source_files_properties(${GUI_RESOURCES} PROPERTIES
+            MACOSX_PACKAGE_LOCATION Resources
+        )
     endif()
 
 elseif(WIN32)
@@ -81,6 +88,7 @@ if(APPLE)
     if(MACOS_GUI)
         add_executable(FontLoaderSub MACOSX_BUNDLE
             ${GUI_SOURCES}
+            ${GUI_RESOURCES}
         )
 
         add_dependencies(FontLoaderSub FontLoaderSubHelper)
@@ -88,6 +96,8 @@ if(APPLE)
         set_target_properties(FontLoaderSub PROPERTIES
             MACOSX_BUNDLE_INFO_PLIST
                 "${CMAKE_CURRENT_SOURCE_DIR}/FontLoaderSub/mac_gui/Info.plist"
+            MACOSX_BUNDLE_ICON_FILE
+                "AppIcon.icns"
             MACOSX_BUNDLE_GUI_IDENTIFIER
                 "${FONTLOADERSUB_BUNDLE_ID}"
             MACOSX_BUNDLE_BUNDLE_NAME

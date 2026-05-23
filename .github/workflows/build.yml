@@ -7,40 +7,64 @@ on:
 jobs:
   windows:
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, ARM64]
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: microsoft/setup-msbuild@v2
+      - name: Configure CMake
+        run: >
+          cmake -S . -B build -A ${{ matrix.platform }}
 
       - name: Build
-        shell: pwsh
-        run: |
-          $tag = git describe --always --dirty="(X)"
-          $env:CMDLINE_DEFINE = "FONTLOADERSUB_GIT_VERSION=\""$tag\"""
-          msbuild FontLoaderSub.sln /p:Platform=x86 /p:Configuration=Minimize
+        run: >
+          cmake --build build --config Release
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FontLoaderSub-Windows-x86
-          path: Minimize/Win32/FontLoaderSub.exe
+          name: FontLoaderSub-Windows-${{ matrix.platform }}
+          path: build/Release/FontLoaderSub.exe
 
   macos:
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
     steps:
       - uses: actions/checkout@v4
 
       - name: CMake configure
         run: >
-          cmake -S . -B build -G Xcode
+          cmake -S . -B build-${{ matrix.arch }} -G Xcode
           -DMACOS_GUI=ON
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }}
           -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
 
       - name: Build
-        run: cmake --build build --config Release --target FontLoaderSub
+        run: cmake --build build-${{ matrix.arch }} --config Release --target FontLoaderSub
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Package DMG
+        run: |
+          create-dmg \
+            --volname "FontLoaderSub" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 100 \
+            --icon "FontLoaderSub.app" 175 190 \
+            --hide-extension "FontLoaderSub.app" \
+            --app-drop-link 425 185 \
+            "build-${{ matrix.arch }}/Release/FontLoaderSub.dmg" \
+            "build-${{ matrix.arch }}/Release/FontLoaderSub.app"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: FontLoaderSub-macOS
-          path: build/Release/FontLoaderSub.app
+          name: FontLoaderSub-macOS-${{ matrix.arch }}
+          path: build-${{ matrix.arch }}/Release/FontLoaderSub.dmg

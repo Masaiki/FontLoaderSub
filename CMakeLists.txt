@@ -139,29 +139,47 @@ if(APPLE)
         )
     endif()
 else()
-    add_executable(fontloadersub WIN32
+    add_executable(FontLoaderSub WIN32
         ${COMMON_SOURCES}
         ${PLATFORM_SOURCES}
     )
 
-    target_include_directories(fontloadersub PRIVATE FontLoaderSub)
-    target_compile_definitions(fontloadersub PRIVATE UNICODE _UNICODE)
-    target_link_libraries(fontloadersub PRIVATE ${PLATFORM_LIBS})
+    target_include_directories(FontLoaderSub PRIVATE FontLoaderSub)
+    target_compile_definitions(FontLoaderSub PRIVATE UNICODE _UNICODE)
+    target_link_libraries(FontLoaderSub PRIVATE ${PLATFORM_LIBS})
+
+    # Retrieve git version if not passed as a CMake variable
+    if(NOT FONTLOADERSUB_GIT_VERSION)
+        find_package(Git QUIET)
+        if(GIT_FOUND)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} describe --always --dirty=(X)
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE FONTLOADERSUB_GIT_VERSION
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET
+            )
+        endif()
+    endif()
+
+    if(FONTLOADERSUB_GIT_VERSION)
+        target_compile_definitions(FontLoaderSub PRIVATE "FONTLOADERSUB_GIT_VERSION=\"${FONTLOADERSUB_GIT_VERSION}\"")
+    endif()
 
     if(MSVC)
-        target_compile_options(fontloadersub PRIVATE /Oi)
-        target_link_options(fontloadersub PRIVATE "/MANIFEST:NO")
+        target_compile_options(FontLoaderSub PRIVATE /Oi)
+        target_link_options(FontLoaderSub PRIVATE "/MANIFEST:NO")
     endif()
 
     if(MINGW)
         string(APPEND CMAKE_RC_FLAGS " --codepage=65001")
-        target_link_options(fontloadersub PRIVATE
+        target_link_options(FontLoaderSub PRIVATE
             -municode
         )
-        target_compile_options(fontloadersub PRIVATE
+        target_compile_options(FontLoaderSub PRIVATE
             -Wall -Wextra -Wno-unused-parameter
         )
-        target_compile_definitions(fontloadersub PRIVATE
+        target_compile_definitions(FontLoaderSub PRIVATE
             NTDDI_VERSION=0x0A000000
             _WIN32_WINNT=0x0A00
             WINVER=0x0A00

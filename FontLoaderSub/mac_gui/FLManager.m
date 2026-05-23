@@ -22,6 +22,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     NSMutableData *_stderrBuffer;
     BOOL _helperReady;
     NSMutableArray<NSString *> *_detailLines;
+    NSMutableArray<NSString *> *_loadedFontRelativePaths;
     NSMutableString *_logText;
 }
 @end
@@ -41,6 +42,7 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 - (void)dealloc {
     [self unloadFonts];
     [_detailLines release];
+    [_loadedFontRelativePaths release];
     [_logText release];
     [_task release];
     [_stdinPipe release];
@@ -69,6 +71,10 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
 
 - (NSArray<NSString *> *)detailLines {
     return [[_detailLines copy] autorelease];
+}
+
+- (NSArray<NSString *> *)loadedFontRelativePaths {
+    return [[_loadedFontRelativePaths copy] autorelease];
 }
 
 - (NSString *)logText {
@@ -260,6 +266,14 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
             [_detailLines addObject:line];
             if (numLoaded != NULL && [line hasPrefix:@"[ok]"]) {
                 (*numLoaded)++;
+                NSRange arrowRange = [line rangeOfString:@" <- "];
+                if (arrowRange.location != NSNotFound) {
+                    NSString *relativePath = [line substringFromIndex:NSMaxRange(arrowRange)];
+                    if (relativePath.length > 0 &&
+                        ![_loadedFontRelativePaths containsObject:relativePath]) {
+                        [_loadedFontRelativePaths addObject:relativePath];
+                    }
+                }
             } else if (numFailed != NULL && [line hasPrefix:@"[ X]"]) {
                 (*numFailed)++;
             } else if (numUnmatched != NULL && [line hasPrefix:@"[---]"]) {
@@ -310,6 +324,8 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     _numUnmatched = 0;
     [_detailLines release];
     _detailLines = [[NSMutableArray alloc] init];
+    [_loadedFontRelativePaths release];
+    _loadedFontRelativePaths = [[NSMutableArray alloc] init];
 
     NSDateFormatter *fmt = [[[NSDateFormatter alloc] init] autorelease];
     fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss";
@@ -551,6 +567,8 @@ static NSString *const FLReadyPrefix = @"FLS_READY ";
     _numUnmatched = 0;
     [_detailLines release];
     _detailLines = nil;
+    [_loadedFontRelativePaths release];
+    _loadedFontRelativePaths = nil;
 }
 
 - (void)unloadFonts {

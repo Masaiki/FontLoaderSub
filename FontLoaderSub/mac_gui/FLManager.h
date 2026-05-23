@@ -13,6 +13,7 @@ typedef NS_ENUM(NSInteger, FLManagerState) {
 @property (readonly) NSUInteger numFailed;
 @property (readonly) NSUInteger numUnmatched;
 @property (readonly, copy) NSArray<NSString *> *detailLines;
+@property (readonly, copy) NSArray<NSString *> *loadedFontRelativePaths;
 @property (readonly, copy) NSString *logText;
 
 - (void)loadFontsForSubtitles:(NSArray<NSString *> *)subtitlePaths

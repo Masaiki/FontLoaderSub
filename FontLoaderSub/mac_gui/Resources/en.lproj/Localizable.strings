@@ -1,0 +1,44 @@
+"menu.status.title" = "FontLoaderSub";
+"menu.load_fonts" = "Load Fonts...";
+"menu.cancel_loading" = "Cancel Loading";
+"menu.unload_fonts" = "Unload Fonts";
+"menu.load_details" = "Load Details...";
+"menu.export_loaded_fonts" = "Export Loaded Fonts...";
+"menu.view_log" = "View Log...";
+"menu.rebuild_font_index" = "Rebuild Font Index";
+"menu.set_font_directory" = "Set Font Directory...";
+"menu.help" = "Help";
+"menu.quit" = "Quit FontLoaderSub";
+
+"status.format" = "Status: %@";
+"status.idle" = "Idle";
+"status.no_subtitle_files" = "No subtitle files";
+"status.loading" = "Loading...";
+"status.loaded_summary" = "Loaded %lu / Failed %lu / Missing %lu";
+"status.failed" = "Failed";
+"status.cancelled" = "Cancelled";
+"status.rebuilding_index" = "Rebuilding index...";
+"status.index_removed" = "Index removed";
+
+"font_directory.format" = "Font Directory: %@";
+"font_directory.not_set" = "Font Directory: Not Set";
+
+"alert.ok" = "OK";
+"alert.export.no_files.title" = "No loaded font files to export.";
+"alert.export.no_files.body" = "Load subtitles first, then export the loaded font files.";
+"alert.export.prompt" = "Export";
+"alert.export.message" = "Choose a folder for the loaded font files.";
+"alert.export.result" = "Exported %lu font file%@.";
+"alert.export.failed" = "Failed: %@";
+"alert.index.remove_failed.title" = "Could not remove the font index.";
+"alert.index.removed.title" = "Font index removed.";
+"alert.index.removed.body" = "The next load will rebuild the index for this font directory.";
+
+"help.body" = "1. Set the font directory.\n2. Load ASS/SSA subtitle files or folders.\n3. Keep FontLoaderSub running while watching.\n4. Rebuild the font index after changing fonts.";
+
+"panel.details.title" = "Font Load Details";
+"panel.log.title" = "Load Log";
+"button.clear_log" = "Clear Log";
+
+"service.error.no_font_directory" = "Set a default font directory first from the menu bar app.";
+"service.error.no_subtitles" = "No .ass/.ssa files or folders were provided.";

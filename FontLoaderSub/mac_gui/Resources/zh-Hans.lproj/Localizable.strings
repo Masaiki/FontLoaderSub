@@ -1,0 +1,44 @@
+"menu.status.title" = "FontLoaderSub";
+"menu.load_fonts" = "加载字体...";
+"menu.cancel_loading" = "取消加载";
+"menu.unload_fonts" = "卸载字体";
+"menu.load_details" = "加载详情...";
+"menu.export_loaded_fonts" = "导出已加载字体...";
+"menu.view_log" = "查看日志...";
+"menu.rebuild_font_index" = "重建字体索引";
+"menu.set_font_directory" = "设置字体目录...";
+"menu.help" = "帮助";
+"menu.quit" = "退出 FontLoaderSub";
+
+"status.format" = "状态：%@";
+"status.idle" = "空闲";
+"status.no_subtitle_files" = "没有字幕文件";
+"status.loading" = "正在加载...";
+"status.loaded_summary" = "已加载 %lu / 失败 %lu / 缺失 %lu";
+"status.failed" = "失败";
+"status.cancelled" = "已取消";
+"status.rebuilding_index" = "正在重建索引...";
+"status.index_removed" = "索引已移除";
+
+"font_directory.format" = "字体目录：%@";
+"font_directory.not_set" = "字体目录：未设置";
+
+"alert.ok" = "确定";
+"alert.export.no_files.title" = "没有可导出的已加载字体文件。";
+"alert.export.no_files.body" = "请先加载字幕，然后导出已加载的字体文件。";
+"alert.export.prompt" = "导出";
+"alert.export.message" = "选择用于保存已加载字体文件的文件夹。";
+"alert.export.result" = "已导出 %lu 个字体文件。";
+"alert.export.failed" = "失败：%@";
+"alert.index.remove_failed.title" = "无法移除字体索引。";
+"alert.index.removed.title" = "字体索引已移除。";
+"alert.index.removed.body" = "下次加载时会为此字体目录重建索引。";
+
+"help.body" = "1. 设置字体目录。\n2. 加载 ASS/SSA 字幕文件或文件夹。\n3. 观看时保持 FontLoaderSub 运行。\n4. 更改字体后重建字体索引。";
+
+"panel.details.title" = "字体加载详情";
+"panel.log.title" = "加载日志";
+"button.clear_log" = "清空日志";
+
+"service.error.no_font_directory" = "请先从菜单栏应用设置默认字体目录。";
+"service.error.no_subtitles" = "未提供 .ass/.ssa 文件或文件夹。";

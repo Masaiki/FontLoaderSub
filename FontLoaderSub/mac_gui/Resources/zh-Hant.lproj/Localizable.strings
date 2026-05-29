@@ -1,0 +1,44 @@
+"menu.status.title" = "FontLoaderSub";
+"menu.load_fonts" = "載入字型...";
+"menu.cancel_loading" = "取消載入";
+"menu.unload_fonts" = "卸載字型";
+"menu.load_details" = "載入詳細資訊...";
+"menu.export_loaded_fonts" = "匯出已載入字型...";
+"menu.view_log" = "檢視日誌...";
+"menu.rebuild_font_index" = "重建字型索引";
+"menu.set_font_directory" = "設定字型目錄...";
+"menu.help" = "說明";
+"menu.quit" = "結束 FontLoaderSub";
+
+"status.format" = "狀態：%@";
+"status.idle" = "閒置";
+"status.no_subtitle_files" = "沒有字幕檔案";
+"status.loading" = "正在載入...";
+"status.loaded_summary" = "已載入 %lu / 失敗 %lu / 缺少 %lu";
+"status.failed" = "失敗";
+"status.cancelled" = "已取消";
+"status.rebuilding_index" = "正在重建索引...";
+"status.index_removed" = "索引已移除";
+
+"font_directory.format" = "字型目錄：%@";
+"font_directory.not_set" = "字型目錄：未設定";
+
+"alert.ok" = "確定";
+"alert.export.no_files.title" = "沒有可匯出的已載入字型檔案。";
+"alert.export.no_files.body" = "請先載入字幕，然後匯出已載入的字型檔案。";
+"alert.export.prompt" = "匯出";
+"alert.export.message" = "選擇用來儲存已載入字型檔案的資料夾。";
+"alert.export.result" = "已匯出 %lu 個字型檔案。";
+"alert.export.failed" = "失敗：%@";
+"alert.index.remove_failed.title" = "無法移除字型索引。";
+"alert.index.removed.title" = "字型索引已移除。";
+"alert.index.removed.body" = "下次載入時會為此字型目錄重建索引。";
+
+"help.body" = "1. 設定字型目錄。\n2. 載入 ASS/SSA 字幕檔案或資料夾。\n3. 觀看時保持 FontLoaderSub 執行。\n4. 變更字型後重建字型索引。";
+
+"panel.details.title" = "字型載入詳細資訊";
+"panel.log.title" = "載入日誌";
+"button.clear_log" = "清除日誌";
+
+"service.error.no_font_directory" = "請先從選單列應用程式設定預設字型目錄。";
+"service.error.no_subtitles" = "未提供 .ass/.ssa 檔案或資料夾。";

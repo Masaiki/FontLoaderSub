@@ -49,12 +49,35 @@ if(APPLE)
             FontLoaderSub/mac_gui/AppDelegate.m
             FontLoaderSub/mac_gui/main_mac_gui.m
         )
-        set(GUI_RESOURCES
+        set(GUI_ASSET_RESOURCES
             FontLoaderSub/mac_gui/Resources/AppIcon.icns
             FontLoaderSub/mac_gui/Resources/MenuBarIconTemplate.png
         )
-        set_source_files_properties(${GUI_RESOURCES} PROPERTIES
+        set(GUI_LOCALIZATION_RESOURCES
+            FontLoaderSub/mac_gui/Resources/en.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/en.lproj/InfoPlist.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hans.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hans.lproj/InfoPlist.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hant.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hant.lproj/InfoPlist.strings
+        )
+        set_source_files_properties(${GUI_ASSET_RESOURCES} PROPERTIES
             MACOSX_PACKAGE_LOCATION Resources
+        )
+        set_source_files_properties(
+            FontLoaderSub/mac_gui/Resources/en.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/en.lproj/InfoPlist.strings
+            PROPERTIES MACOSX_PACKAGE_LOCATION Resources/en.lproj
+        )
+        set_source_files_properties(
+            FontLoaderSub/mac_gui/Resources/zh-Hans.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hans.lproj/InfoPlist.strings
+            PROPERTIES MACOSX_PACKAGE_LOCATION Resources/zh-Hans.lproj
+        )
+        set_source_files_properties(
+            FontLoaderSub/mac_gui/Resources/zh-Hant.lproj/Localizable.strings
+            FontLoaderSub/mac_gui/Resources/zh-Hant.lproj/InfoPlist.strings
+            PROPERTIES MACOSX_PACKAGE_LOCATION Resources/zh-Hant.lproj
         )
     endif()
 
@@ -95,7 +118,8 @@ if(APPLE)
     if(MACOS_GUI)
         add_executable(FontLoaderSub MACOSX_BUNDLE
             ${GUI_SOURCES}
-            ${GUI_RESOURCES}
+            ${GUI_ASSET_RESOURCES}
+            ${GUI_LOCALIZATION_RESOURCES}
         )
 
         add_dependencies(FontLoaderSub FontLoaderSubHelper)

@@ -4,8 +4,23 @@
 
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+#include <stdarg.h>
+
 static NSString *const FLDefaultFontDirectoryKey = @"defaultFontDirectory";
 static NSString *const FLCacheFileName = @"fc-subs.db";
+
+static NSString *FLLocalized(NSString *key) {
+    return NSLocalizedString(key, nil);
+}
+
+static NSString *FLFormat(NSString *key, ...) {
+    va_list arguments;
+    va_start(arguments, key);
+    NSString *result = [[[NSString alloc] initWithFormat:FLLocalized(key)
+                                               arguments:arguments] autorelease];
+    va_end(arguments);
+    return result;
+}
 
 @interface AppDelegate () {
     NSStatusItem *_statusItem;
@@ -56,7 +71,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
 
     _manager = [[FLManager alloc] init];
     [self buildMenu];
-    [self updateMenuForStatus:@"Idle"];
+    [self updateMenuForStatus:FLLocalized(@"status.idle")];
 
     [NSApp setServicesProvider:self];
     [NSApp registerServicesMenuSendTypes:@[NSPasteboardTypeFileURL] returnTypes:@[]];
@@ -91,61 +106,61 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
 
     _menu = [[NSMenu alloc] initWithTitle:@"FontLoaderSub"];
 
-    NSMenuItem *titleItem = [[[NSMenuItem alloc] initWithTitle:@"FontLoaderSub" action:nil keyEquivalent:@""] autorelease];
+    NSMenuItem *titleItem = [[[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.status.title") action:nil keyEquivalent:@""] autorelease];
     titleItem.enabled = NO;
     [_menu addItem:titleItem];
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    _statusMenuItem = [[NSMenuItem alloc] initWithTitle:@"Status: Idle" action:nil keyEquivalent:@""];
+    _statusMenuItem = [[NSMenuItem alloc] initWithTitle:FLFormat(@"status.format", FLLocalized(@"status.idle")) action:nil keyEquivalent:@""];
     _statusMenuItem.enabled = NO;
     [_menu addItem:_statusMenuItem];
 
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    _loadMenuItem = [[NSMenuItem alloc] initWithTitle:@"Load Fonts…" action:@selector(loadFontsFromMenu:) keyEquivalent:@""];
+    _loadMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.load_fonts") action:@selector(loadFontsFromMenu:) keyEquivalent:@""];
     _loadMenuItem.target = self;
     [_menu addItem:_loadMenuItem];
 
-    _cancelMenuItem = [[NSMenuItem alloc] initWithTitle:@"Cancel Loading" action:@selector(cancelLoading:) keyEquivalent:@""];
+    _cancelMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.cancel_loading") action:@selector(cancelLoading:) keyEquivalent:@""];
     _cancelMenuItem.target = self;
     [_menu addItem:_cancelMenuItem];
 
-    _unloadMenuItem = [[NSMenuItem alloc] initWithTitle:@"Unload Fonts" action:@selector(unloadFontsFromMenu:) keyEquivalent:@""];
+    _unloadMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.unload_fonts") action:@selector(unloadFontsFromMenu:) keyEquivalent:@""];
     _unloadMenuItem.target = self;
     [_menu addItem:_unloadMenuItem];
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    _detailsMenuItem = [[NSMenuItem alloc] initWithTitle:@"Load Details…" action:@selector(showLoadDetails:) keyEquivalent:@""];
+    _detailsMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.load_details") action:@selector(showLoadDetails:) keyEquivalent:@""];
     _detailsMenuItem.target = self;
     [_menu addItem:_detailsMenuItem];
 
-    _exportMenuItem = [[NSMenuItem alloc] initWithTitle:@"Export Loaded Fonts…" action:@selector(exportLoadedFonts:) keyEquivalent:@""];
+    _exportMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.export_loaded_fonts") action:@selector(exportLoadedFonts:) keyEquivalent:@""];
     _exportMenuItem.target = self;
     [_menu addItem:_exportMenuItem];
 
-    _logMenuItem = [[NSMenuItem alloc] initWithTitle:@"View Log…" action:@selector(showLog:) keyEquivalent:@""];
+    _logMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.view_log") action:@selector(showLog:) keyEquivalent:@""];
     _logMenuItem.target = self;
     [_menu addItem:_logMenuItem];
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    _rebuildIndexMenuItem = [[NSMenuItem alloc] initWithTitle:@"Rebuild Font Index" action:@selector(rebuildFontIndex:) keyEquivalent:@""];
+    _rebuildIndexMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.rebuild_font_index") action:@selector(rebuildFontIndex:) keyEquivalent:@""];
     _rebuildIndexMenuItem.target = self;
     [_menu addItem:_rebuildIndexMenuItem];
 
-    NSMenuItem *setFontDirItem = [[[NSMenuItem alloc] initWithTitle:@"Set Font Directory…" action:@selector(setFontDirectoryFromMenu:) keyEquivalent:@""] autorelease];
+    NSMenuItem *setFontDirItem = [[[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.set_font_directory") action:@selector(setFontDirectoryFromMenu:) keyEquivalent:@""] autorelease];
     setFontDirItem.target = self;
     [_menu addItem:setFontDirItem];
 
-    _fontDirectoryMenuItem = [[NSMenuItem alloc] initWithTitle:@"Font Directory: Not Set" action:nil keyEquivalent:@""];
+    _fontDirectoryMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"font_directory.not_set") action:nil keyEquivalent:@""];
     _fontDirectoryMenuItem.enabled = NO;
     [_menu addItem:_fontDirectoryMenuItem];
     [_menu addItem:[NSMenuItem separatorItem]];
 
-    _helpMenuItem = [[NSMenuItem alloc] initWithTitle:@"Help" action:@selector(showHelp:) keyEquivalent:@""];
+    _helpMenuItem = [[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.help") action:@selector(showHelp:) keyEquivalent:@""];
     _helpMenuItem.target = self;
     [_menu addItem:_helpMenuItem];
 
-    NSMenuItem *quitItem = [[[NSMenuItem alloc] initWithTitle:@"Quit FontLoaderSub" action:@selector(quitApp:) keyEquivalent:@""] autorelease];
+    NSMenuItem *quitItem = [[[NSMenuItem alloc] initWithTitle:FLLocalized(@"menu.quit") action:@selector(quitApp:) keyEquivalent:@""] autorelease];
     quitItem.target = self;
     [_menu addItem:quitItem];
 
@@ -166,7 +181,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
 }
 
 - (void)updateMenuForStatus:(NSString *)statusText {
-    _statusMenuItem.title = [NSString stringWithFormat:@"Status: %@", statusText ?: @"Idle"];
+    _statusMenuItem.title = FLFormat(@"status.format", statusText ?: FLLocalized(@"status.idle"));
     BOOL loading = (_manager.state == FLManagerStateLoading);
     BOOL loaded = (_manager.state == FLManagerStateLoaded);
     BOOL hasDetails = (_manager.detailLines.count > 0);
@@ -182,10 +197,10 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSString *fontDir = [self defaultFontDirectory];
     if (fontDir.length > 0) {
         NSString *displayName = fontDir.lastPathComponent.length > 0 ? fontDir.lastPathComponent : fontDir;
-        _fontDirectoryMenuItem.title = [NSString stringWithFormat:@"Font Directory: %@", displayName];
+        _fontDirectoryMenuItem.title = FLFormat(@"font_directory.format", displayName);
         _fontDirectoryMenuItem.toolTip = fontDir;
     } else {
-        _fontDirectoryMenuItem.title = @"Font Directory: Not Set";
+        _fontDirectoryMenuItem.title = FLLocalized(@"font_directory.not_set");
         _fontDirectoryMenuItem.toolTip = nil;
     }
 }
@@ -221,7 +236,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
 
 - (void)startLoadingSubtitlePaths:(NSArray<NSString *> *)subtitlePaths fontDirectory:(NSString *)fontDirectory {
     if (subtitlePaths.count == 0) {
-        [self updateMenuForStatus:@"No subtitle files"];
+        [self updateMenuForStatus:FLLocalized(@"status.no_subtitle_files")];
         return;
     }
 
@@ -230,7 +245,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     [_lastFontDirectory release];
     _lastFontDirectory = [fontDirectory copy];
 
-    [self updateMenuForStatus:@"Loading…"];
+    [self updateMenuForStatus:FLLocalized(@"status.loading")];
     [_manager loadFontsForSubtitles:subtitlePaths
                             fontDir:fontDirectory
                            progress:^(NSString *message) {
@@ -238,13 +253,13 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
                            }
                          completion:^(FLManagerState state, NSError *error) {
                              if (state == FLManagerStateLoaded) {
-                                 NSString *status = [NSString stringWithFormat:@"Loaded %lu / Failed %lu / Missing %lu",
-                                                     (unsigned long)self->_manager.numLoaded,
-                                                     (unsigned long)self->_manager.numFailed,
-                                                     (unsigned long)self->_manager.numUnmatched];
+                                 NSString *status = FLFormat(@"status.loaded_summary",
+                                                             (unsigned long)self->_manager.numLoaded,
+                                                             (unsigned long)self->_manager.numFailed,
+                                                             (unsigned long)self->_manager.numUnmatched);
                                  [self updateMenuForStatus:status];
                              } else {
-                                 [self updateMenuForStatus:error.localizedDescription ?: @"Failed"];
+                                 [self updateMenuForStatus:error.localizedDescription ?: FLLocalized(@"status.failed")];
                              }
                          }];
 }
@@ -305,19 +320,19 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     }
 
     [self setDefaultFontDirectory:fontDirectory];
-    [self updateMenuForStatus:@"Idle"];
+    [self updateMenuForStatus:FLLocalized(@"status.idle")];
 }
 
 - (IBAction)unloadFontsFromMenu:(id)sender {
     (void)sender;
     [_manager unloadFonts];
-    [self updateMenuForStatus:@"Idle"];
+    [self updateMenuForStatus:FLLocalized(@"status.idle")];
 }
 
 - (IBAction)cancelLoading:(id)sender {
     (void)sender;
     [_manager cancel];
-    [self updateMenuForStatus:@"Cancelled"];
+    [self updateMenuForStatus:FLLocalized(@"status.cancelled")];
 }
 
 - (IBAction)quitApp:(id)sender {
@@ -355,7 +370,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSAlert *alert = [[[NSAlert alloc] init] autorelease];
     alert.messageText = message ?: @"FontLoaderSub";
     alert.informativeText = informativeText ?: @"";
-    [alert addButtonWithTitle:@"OK"];
+    [alert addButtonWithTitle:FLLocalized(@"alert.ok")];
     [alert runModal];
 }
 
@@ -365,8 +380,8 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSArray<NSString *> *relativePaths = _manager.loadedFontRelativePaths;
     NSString *fontDirectory = _lastFontDirectory ?: [self defaultFontDirectory];
     if (relativePaths.count == 0 || fontDirectory.length == 0) {
-        [self showMessage:@"No loaded font files to export."
-          informativeText:@"Load subtitles first, then export the loaded font files."];
+        [self showMessage:FLLocalized(@"alert.export.no_files.title")
+          informativeText:FLLocalized(@"alert.export.no_files.body")];
         return;
     }
 
@@ -374,8 +389,8 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     panel.canChooseFiles = NO;
     panel.canChooseDirectories = YES;
     panel.allowsMultipleSelection = NO;
-    panel.prompt = @"Export";
-    panel.message = @"Choose a folder for the loaded font files.";
+    panel.prompt = FLLocalized(@"alert.export.prompt");
+    panel.message = FLLocalized(@"alert.export.message");
     if ([panel runModal] != NSModalResponseOK) {
         return;
     }
@@ -396,12 +411,12 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
         }
     }
 
-    NSString *message = [NSString stringWithFormat:@"Exported %lu font file%@.",
-                                                   (unsigned long)copied,
-                                                   copied == 1 ? @"" : @"s"];
+    NSString *message = FLFormat(@"alert.export.result",
+                                 (unsigned long)copied,
+                                 copied == 1 ? @"" : @"s");
     NSString *detail = failed.count == 0
         ? destinationDirectory
-        : [NSString stringWithFormat:@"Failed: %@", [failed componentsJoinedByString:@", "]];
+        : FLFormat(@"alert.export.failed", [failed componentsJoinedByString:@", "]);
     [self showMessage:message informativeText:detail];
 }
 
@@ -422,7 +437,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSError *error = nil;
     if ([fileManager fileExistsAtPath:cachePath] &&
         ![fileManager removeItemAtPath:cachePath error:&error]) {
-        [self showMessage:@"Could not remove the font index."
+        [self showMessage:FLLocalized(@"alert.index.remove_failed.title")
           informativeText:error.localizedDescription ?: cachePath];
         return;
     }
@@ -430,19 +445,19 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     if (_lastSubtitlePaths.count > 0) {
         NSArray<NSString *> *subtitlePaths = [[_lastSubtitlePaths copy] autorelease];
         [_manager unloadFonts];
-        [self updateMenuForStatus:@"Rebuilding index…"];
+        [self updateMenuForStatus:FLLocalized(@"status.rebuilding_index")];
         [self startLoadingSubtitlePaths:subtitlePaths fontDirectory:fontDirectory];
     } else {
-        [self updateMenuForStatus:@"Index removed"];
-        [self showMessage:@"Font index removed."
-          informativeText:@"The next load will rebuild the index for this font directory."];
+        [self updateMenuForStatus:FLLocalized(@"status.index_removed")];
+        [self showMessage:FLLocalized(@"alert.index.removed.title")
+          informativeText:FLLocalized(@"alert.index.removed.body")];
     }
 }
 
 - (IBAction)showHelp:(id)sender {
     (void)sender;
     [self showMessage:@"FontLoaderSub"
-      informativeText:@"1. Set the font directory.\n2. Load ASS/SSA subtitle files or folders.\n3. Keep FontLoaderSub running while watching.\n4. Rebuild the font index after changing fonts."];
+      informativeText:FLLocalized(@"help.body")];
 }
 
 - (IBAction)showLoadDetails:(id)sender {
@@ -460,7 +475,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
                                                              NSWindowStyleMaskResizable)
                                                     backing:NSBackingStoreBuffered
                                                       defer:YES];
-        _detailPanel.title = @"Font Load Details";
+        _detailPanel.title = FLLocalized(@"panel.details.title");
         _detailPanel.releasedWhenClosed = NO;
         [_detailPanel center];
 
@@ -500,12 +515,12 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
                                                           NSWindowStyleMaskResizable)
                                                  backing:NSBackingStoreBuffered
                                                    defer:YES];
-        _logPanel.title = @"Load Log";
+        _logPanel.title = FLLocalized(@"panel.log.title");
         _logPanel.releasedWhenClosed = NO;
         [_logPanel center];
 
         NSButton *clearButton = [[[NSButton alloc] initWithFrame:NSMakeRect(0, 0, 80, 32)] autorelease];
-        clearButton.title = @"Clear Log";
+        clearButton.title = FLLocalized(@"button.clear_log");
         clearButton.bezelStyle = NSBezelStyleRounded;
         clearButton.target = self;
         clearButton.action = @selector(clearLog:);
@@ -583,7 +598,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSString *fontDirectory = [self defaultFontDirectory];
     if (fontDirectory.length == 0) {
         if (error != NULL) {
-            *error = @"Set a default font directory first from the menu bar app.";
+            *error = FLLocalized(@"service.error.no_font_directory");
         }
         return;
     }
@@ -591,7 +606,7 @@ static NSString *const FLCacheFileName = @"fc-subs.db";
     NSArray<NSString *> *subtitlePaths = [self subtitlePathsFromPasteboard:pboard];
     if (subtitlePaths.count == 0) {
         if (error != NULL) {
-            *error = @"No .ass/.ssa files or folders were provided.";
+            *error = FLLocalized(@"service.error.no_subtitles");
         }
         return;
     }
